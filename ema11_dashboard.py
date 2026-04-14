@@ -1,5 +1,5 @@
-"""
-ema11_dashboard.py  –  EMA-11 Dashboard  http://IP:8051
+﻿"""
+ema11_dashboard.py  –  Bee4 WaveTrend Dashboard  http://IP:8051
 """
 from __future__ import annotations
 import argparse, json, os, threading
@@ -1001,8 +1001,8 @@ def sidebar():
     return html.Div([
         # nagłówek
         html.Div([
-            html.Div("EMA-11 Bot",style={"fontSize":"16px","fontWeight":"700","color":C["text"]}),
-            html.Div("RSI · TMA · EMA Trend",style={"fontSize":"11px","color":C["muted"],"marginTop":"2px"}),
+            html.Div("Bee4 Bot",style={"fontSize":"16px","fontWeight":"700","color":C["text"]}),
+            html.Div("WaveTrend reversal",style={"fontSize":"11px","color":C["muted"],"marginTop":"2px"}),
         ],style={"marginBottom":"20px","paddingBottom":"14px","borderBottom":f"1px solid {C['border']}"}),
 
         # dane
@@ -2191,5 +2191,6 @@ if __name__ == "__main__":
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--debug", action="store_true")
     a = p.parse_args()
-    print(f"\n{'='*50}\n  EMA-11 Dashboard  →  http://{a.host}:{a.port}\n{'='*50}\n")
+    print(f"\n{'='*50}\n  Bee4 WaveTrend Dashboard  →  http://{a.host}:{a.port}\n{'='*50}\n")
     app.run(host=a.host, port=a.port, debug=a.debug)
+
