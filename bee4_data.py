@@ -1,5 +1,5 @@
-"""
-ema11_data.py
+﻿"""
+bee4_data.py
 =============
 OHLCV loading and WaveTrend indicator preparation for bee4.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ema11_params import (
+from bee4_params import (
     WT_CHANNEL_LEN,
     WT_AVG_LEN,
     WT_SIGNAL_LEN,
@@ -135,3 +135,4 @@ def format_ts(ts) -> str:
     if pd.isna(ts):
         return "NaT"
     return pd.Timestamp(ts).tz_convert("UTC").strftime("%Y-%m-%d %H:%M")
+

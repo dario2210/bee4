@@ -1,5 +1,5 @@
-"""
-test_ema11.py
+﻿"""
+test_bee4.py
 =============
 Pytest suite for the first bee4 WaveTrend strategy.
 """
@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ema11_binance import interval_to_ms, wfo_bars
-from ema11_data import load_klines, prepare_indicators, wt_columns
-from ema11_engine import (
+from bee4_binance import interval_to_ms, wfo_bars
+from bee4_data import load_klines, prepare_indicators, wt_columns
+from bee4_engine import (
     BarData,
     PositionState,
     apply_slippage,
@@ -24,7 +24,7 @@ from ema11_engine import (
     generate_entry_signal,
     generate_exit_signal,
 )
-from ema11_strategy import EMA11Strategy
+from bee4_strategy import Bee4Strategy
 
 
 BASE_PARAMS = {
@@ -165,7 +165,7 @@ class TestExitSignals:
 class TestStrategy:
     def test_strategy_reverses_on_opposite_signal(self):
         df = _signal_df()
-        strat = EMA11Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(BASE_PARAMS)
         trades, equity, final_cap = strat.run(df, 10_000.0)
 
         assert len(trades) == 3
@@ -178,7 +178,7 @@ class TestStrategy:
 
     def test_capital_after_matches_final_cap(self):
         df = _signal_df()
-        strat = EMA11Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(BASE_PARAMS)
         trades, _equity, final_cap = strat.run(df, 10_000.0)
         assert trades.iloc[-1]["capital_after"] == pytest.approx(final_cap, abs=1e-8)
 
@@ -244,7 +244,7 @@ class TestWFOHelpers:
         assert interval_to_ms("1h") == 3_600_000
 
     def test_save_and_load_params_json(self):
-        from ema11_params import save_params
+        from bee4_params import save_params
 
         path = Path(".test_params.json")
         try:
@@ -259,7 +259,7 @@ class TestWFOHelpers:
 
 class TestClosedCandleOnly:
     def test_runner_uses_last_closed_candle(self):
-        import ema11_live_runner as runner_module
+        import bee4_live_runner as runner_module
 
         source = inspect.getsource(runner_module.main_loop)
         assert "df.iloc[-2]" in source
@@ -270,8 +270,8 @@ class TestClosedCandleOnly:
 class TestBacktestRunnerParity:
     def _simulate_runner(self, df: pd.DataFrame, params: dict) -> list[dict]:
         import copy
-        import ema11_live_runner as runner_module
-        from ema11_live_runner import process_bar
+        import bee4_live_runner as runner_module
+        from bee4_live_runner import process_bar
 
         state = {
             "position": None,
@@ -306,7 +306,7 @@ class TestBacktestRunnerParity:
 
     def test_same_closed_trades_as_runner(self):
         df = _signal_df()
-        strat = EMA11Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(BASE_PARAMS)
         bt_trades, _equity, _final_cap = strat.run(df, 10_000.0)
         bt_real = bt_trades[bt_trades["reason"] != "FORCE_EXIT_END"].reset_index(drop=True)
 
@@ -319,3 +319,4 @@ class TestBacktestRunnerParity:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+

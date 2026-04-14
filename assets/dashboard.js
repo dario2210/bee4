@@ -500,7 +500,7 @@
   }
 
   function ensureChart(container) {
-    const current = window.__bee1LightweightChart;
+    const current = window.__bee4LightweightChart;
     if (current && current.container === container) {
       return current;
     }
@@ -509,8 +509,8 @@
       destroyChartState(current);
     }
 
-    window.__bee1LightweightChart = buildChartState(container);
-    return window.__bee1LightweightChart;
+    window.__bee4LightweightChart = buildChartState(container);
+    return window.__bee4LightweightChart;
   }
 
   function lineSeriesOptions(line) {
@@ -530,8 +530,8 @@
 
   function showRenderError(container, error) {
     console.error("Bee1 chart render failed", error);
-    destroyChartState(window.__bee1LightweightChart);
-    window.__bee1LightweightChart = null;
+    destroyChartState(window.__bee4LightweightChart);
+    window.__bee4LightweightChart = null;
     container.innerHTML = [
       '<div style="padding:18px;color:#ffb454;background:rgba(255,180,84,0.08);border:1px solid rgba(255,180,84,0.22);border-radius:18px;">',
       "<strong>Nie udalo sie wyrenderowac wykresu.</strong><br>",
@@ -638,8 +638,8 @@
       scheduleOverlayRefresh(state);
     } catch (error) {
       if (attempt < 1) {
-        destroyChartState(window.__bee1LightweightChart);
-        window.__bee1LightweightChart = null;
+        destroyChartState(window.__bee4LightweightChart);
+        window.__bee4LightweightChart = null;
         setTimeout(function () {
           render(payload, attempt + 1);
         }, 80);
@@ -653,8 +653,9 @@
   }
 
   window.dash_clientside = Object.assign({}, window.dash_clientside, {
-    bee1_dashboard: {
+    bee4_dashboard: {
       render: render,
     },
   });
 })();
+

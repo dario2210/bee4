@@ -1,5 +1,5 @@
 ﻿"""
-ema11_dashboard.py  –  Bee4 WaveTrend Dashboard  http://IP:8051
+bee4_dashboard.py  –  Bee4 WaveTrend Dashboard  http://IP:8064
 """
 from __future__ import annotations
 import argparse, json, os, threading
@@ -11,7 +11,7 @@ from dash import dcc, html, dash_table, Input, Output, State, ctx, ALL
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from ema11_params import (
+from bee4_params import (
     INITIAL_CAPITAL, FEE_RATE,
     TP_GRID, SL_GRID, TRAIL_DROP_GRID, EMA_LEN_GRID,
     TMA_LOW_MIN, TMA_LOW_MAX, TMA_HIGH_MIN, TMA_HIGH_MAX,
@@ -20,14 +20,14 @@ from ema11_params import (
     DEFAULT_PARAMS,
     WT_CHANNEL_LEN_GRID, WT_AVG_LEN_GRID, WT_SIGNAL_LEN_GRID, WT_MIN_SIGNAL_LEVEL_GRID,
 )
-from ema11_data     import load_klines, prepare_indicators
-from ema11_strategy import EMA11Strategy
-from ema11_wfo      import walk_forward_optimization
-from ema11_stats    import (
+from bee4_data     import load_klines, prepare_indicators
+from bee4_strategy import Bee4Strategy
+from bee4_wfo      import walk_forward_optimization
+from bee4_stats    import (
     compute_stats, fee_summary_by_period,
     breakdown_by_side, breakdown_by_period,
 )
-from ema11_binance  import update_csv_cache, wfo_bars
+from bee4_binance  import update_csv_cache, wfo_bars
 
 # ─── Kolory ──────────────────────────────────────────────────────────────────
 C = {
@@ -198,71 +198,6 @@ def fig_fee(fd):
     fig.update_yaxes(title_text="Net PnL",secondary_y=False,gridcolor=C["border"])
     fig.update_yaxes(title_text="Fee USD",secondary_y=True,gridcolor="rgba(0,0,0,0)")
     return fig
-
-def _trade_detail_panel(trade: dict | None) -> html.Div:
-    """Panel ze szczegółami wybranego trade'u."""
-    if not trade:
-        return html.Div(
-            "Kliknij wiersz w tabeli Transakcje aby zobaczyć szczegóły trade'u.",
-            style={"color":C["muted"],"fontSize":"12px","marginTop":"12px",
-                   "textAlign":"center","padding":"16px"})
-
-    pnl = trade.get("pnl", 0)
-    pnl_clr = C["green"] if pnl >= 0 else C["red"]
-
-    def row2(l1,v1,l2,v2):
-        s = {"flex":"1","minWidth":"160px"}
-        return html.Div([
-            html.Div([lbl(l1), html.Div(v1, style={"fontSize":"13px","color":C["text"],"fontWeight":"500"})],style=s),
-            html.Div([lbl(l2), html.Div(v2, style={"fontSize":"13px","color":C["text"],"fontWeight":"500"})],style=s),
-        ], style={"display":"flex","gap":"16px","marginBottom":"6px"})
-
-    return html.Div([
-        html.Div("Szczegóły trade'u", style={"fontSize":"11px","fontWeight":"600",
-            "color":C["muted"],"textTransform":"uppercase","letterSpacing":"0.06em",
-            "marginBottom":"10px"}),
-        html.Div([
-            # identyfikacja
-            row2("Side/Powód",
-                 html.Span(f"{trade.get('side','').upper()}  →  {trade.get('reason','')}",
-                           style={"color": C["green"] if trade.get('side')=='long' else C["red"],
-                                  "fontWeight":"600"}),
-                 "Wynik",
-                 html.Span(f"{pnl:+.2f} USD  ({trade.get('net_ret',0)*100:+.3f}%)",
-                           style={"color":pnl_clr,"fontWeight":"600"})),
-            row2("Wejście", f"{trade.get('entry_time','')}  @  {trade.get('entry_price',0):.4f}",
-                 "Wyjście", f"{trade.get('exit_time','')}  @  {trade.get('exit_price',0):.4f}"),
-            row2("Bary w pozycji", str(trade.get('exit_bars', trade.get('bars_in_position','n/d'))),
-                 "Fee", f"{trade.get('fee_usd',0):.2f} USD"),
-
-            html.Div(style={"borderTop":f"1px solid {C['border']}","margin":"8px 0"}),
-            html.Div("Snapshot wejścia", style={"fontSize":"10px","color":C["muted"],
-                "fontWeight":"600","textTransform":"uppercase","letterSpacing":"0.05em",
-                "marginBottom":"6px"}),
-            row2("RSI", f"{trade.get('entry_rsi',0):.2f}",
-                 "TMA(RSI)", f"{trade.get('entry_tma_rsi',0):.2f}"),
-            row2("EMA", f"{trade.get('entry_ema',0):.2f}",
-                 "EMA slope", f"{trade.get('entry_ema_slope',0)*100:.4f}%"),
-            row2("Dist EMA", f"{trade.get('entry_ema_dist',0)*100:.3f}%",
-                 "Strefa TMA", f"{trade.get('entry_tma_zone','')}  cross: {trade.get('entry_cross_type','')}"),
-            row2("TP plan", f"{trade.get('entry_tp_price',0):.4f}",
-                 "SL plan",  f"{trade.get('entry_sl_price',0):.4f}"),
-
-            html.Div(style={"borderTop":f"1px solid {C['border']}","margin":"8px 0"}),
-            html.Div("Snapshot wyjścia", style={"fontSize":"10px","color":C["muted"],
-                "fontWeight":"600","textTransform":"uppercase","letterSpacing":"0.05em",
-                "marginBottom":"6px"}),
-            row2("RSI wyjście", f"{trade.get('exit_rsi',0):.2f}",
-                 "TMA wyjście", f"{trade.get('exit_tma_rsi',0):.2f}"),
-            row2("RSI peak", str(round(trade.get('exit_rsi_peak',float('nan')),2))
-                             if str(trade.get('exit_rsi_peak','')) not in ('','nan','None') else 'n/d',
-                 "Over zone",  str(trade.get('exit_over_zone',False))),
-            row2("Trigger", trade.get('exit_trigger', trade.get('reason','')),
-                 "Window WFO", str(trade.get('window_id','n/d'))),
-        ]),
-    ], style={"background":C["surface"],"border":f"1px solid {C['border']}",
-              "borderRadius":"10px","padding":"16px 20px","marginTop":"12px"})
-
 
 def _trade_detail_panel(trade: dict | None) -> html.Div:
     """Panel ze szczegolami wybranego trade'u."""
@@ -1253,8 +1188,8 @@ app.clientside_callback(
         if (!chartPayload) {
             return "";
         }
-        if (window.dash_clientside && window.dash_clientside.bee1_dashboard) {
-            return window.dash_clientside.bee1_dashboard.render(chartPayload);
+        if (window.dash_clientside && window.dash_clientside.bee4_dashboard) {
+            return window.dash_clientside.bee4_dashboard.render(chartPayload);
         }
         return "";
     }
@@ -1312,7 +1247,7 @@ def _worker(symbol, tf, market, start, end, capital,
 
         fee_rate_val = float(fee if fee is not None and fee != "" else FEE_RATE * 100) / 100.0
 
-        import ema11_params as ep
+        import bee4_params as ep
         saved = (
             ep.WT_CHANNEL_LEN_GRID,
             ep.WT_AVG_LEN_GRID,
@@ -1654,8 +1589,8 @@ def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) 
             ], className="panel-head"),
             html.Div(id="tv-chart", className="tv-chart"),
             html.Div(
-                "Górny panel pokazuje cenę i markery trade'ów, a dolny RSI oraz TMA(RSI), "
-                "czyli sygnał używany przy wejściach i wyjściach.",
+                "Górny panel pokazuje cenę i markery trade'ów, a dolny przebiegi WT1 i WT2 "
+                "z poziomem zera oraz strefami sygnałowymi.",
                 className="chart-caption",
             ),
         ], className="result-panel"),
@@ -1745,8 +1680,8 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                         {"if": {"column_id": "trade_no"}, "fontWeight": "700", "color": C["amber"]},
                         {"if": {"filter_query": '{side} = "long"', "column_id": "side"}, "color": C["green"]},
                         {"if": {"filter_query": '{side} = "short"', "column_id": "side"}, "color": C["red"]},
-                        {"if": {"filter_query": '{reason} = "SL"', "column_id": "reason"}, "color": C["red"]},
-                        {"if": {"filter_query": '{reason} = "TP"', "column_id": "reason"}, "color": C["green"]},
+                        {"if": {"filter_query": '{reason} contains "REVERSE"', "column_id": "reason"}, "color": C["amber"]},
+                        {"if": {"filter_query": '{reason} contains "FORCE"', "column_id": "reason"}, "color": C["muted"]},
                     ],
                     sort_action="native",
                     filter_action="native",
@@ -2014,8 +1949,8 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                     ], className="panel-head"),
                     html.Div(id="tv-chart", className="tv-chart"),
                     html.Div(
-                        "EMA lines and trade markers are rendered with the same open source "
-                        "TradingView library used in bee3.",
+                        "Cena, markery transakcji oraz panel WaveTrend sa renderowane przez "
+                        "ten sam otwarty silnik Lightweight Charts od TradingView.",
                         className="chart-caption",
                     ),
                 ], className="result-panel"),
@@ -2060,8 +1995,8 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                         style_data_conditional=[
                             {"if":{"filter_query":'{side} = "long"', "column_id":"side"},"color":C["green"]},
                             {"if":{"filter_query":'{side} = "short"',"column_id":"side"},"color":C["red"]},
-                            {"if":{"filter_query":'{reason} = "SL"', "column_id":"reason"},"color":C["red"]},
-                            {"if":{"filter_query":'{reason} = "TP"', "column_id":"reason"},"color":C["green"]},
+                            {"if":{"filter_query":'{reason} contains "REVERSE"', "column_id":"reason"},"color":C["amber"]},
+                            {"if":{"filter_query":'{reason} contains "FORCE"', "column_id":"reason"},"color":C["muted"]},
                         ],
                         sort_action="native", filter_action="native",
                     ),
@@ -2193,4 +2128,5 @@ if __name__ == "__main__":
     a = p.parse_args()
     print(f"\n{'='*50}\n  Bee4 WaveTrend Dashboard  →  http://{a.host}:{a.port}\n{'='*50}\n")
     app.run(host=a.host, port=a.port, debug=a.debug)
+
 

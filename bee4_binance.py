@@ -1,5 +1,5 @@
-"""
-ema11_binance.py
+﻿"""
+bee4_binance.py
 ================
 Pobieranie świec OHLCV z publicznego API Binance (spot + futures).
 Nie wymaga klucza API – dane świec są publiczne.
@@ -339,3 +339,4 @@ if __name__ == "__main__":
     for tf in ["15m", "30m", "1h", "4h", "1d"]:
         ob, lb = wfo_bars(tf, 90, 14)
         print(f"  WFO bary dla {tf:4s}: opt={ob:5d}  live={lb:4d}")
+

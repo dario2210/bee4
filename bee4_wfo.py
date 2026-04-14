@@ -1,5 +1,5 @@
-"""
-ema11_wfo.py
+﻿"""
+bee4_wfo.py
 ============
 Walk-forward optimization for the first bee4 WaveTrend strategy.
 """
@@ -11,8 +11,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from ema11_binance import wfo_bars
-from ema11_params import (
+from bee4_binance import wfo_bars
+from bee4_params import (
     BINANCE_INTERVAL,
     FEE_RATE,
     INITIAL_CAPITAL,
@@ -27,8 +27,8 @@ from ema11_params import (
     WT_SIGNAL_LEN,
     WT_SIGNAL_LEN_GRID,
 )
-from ema11_strategy import EMA11Strategy
-from ema11_wfo_scoring import score_params
+from bee4_strategy import Bee4Strategy
+from bee4_wfo_scoring import score_params
 
 
 def walk_forward_optimization(
@@ -80,7 +80,7 @@ def walk_forward_optimization(
                             "wt_signal_len": wt_signal_len,
                             "wt_min_signal_level": wt_min_signal_level,
                         }
-                        strat = EMA11Strategy(params, fee_rate=fee_rate)
+                        strat = Bee4Strategy(params, fee_rate=fee_rate)
                         trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
                         score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
                         if score > best_score:
@@ -107,7 +107,7 @@ def walk_forward_optimization(
             dd_arr = (equity - running_max) / running_max
             opt_max_dd = dd_arr.min() * 100.0
 
-        strat = EMA11Strategy(best_params, fee_rate=fee_rate)
+        strat = Bee4Strategy(best_params, fee_rate=fee_rate)
         trades_live, equity_live, final_cap_live = strat.run(live_slice, current_capital)
 
         if not trades_live.empty:
@@ -207,3 +207,4 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_signal_len": signal_len,
         "wt_min_signal_level": min_signal_level,
     }
+

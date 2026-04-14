@@ -15,4 +15,5 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8064
 
-CMD ["python", "ema11_dashboard.py", "--host", "0.0.0.0", "--port", "8064"]
+CMD ["python", "bee4_dashboard.py", "--host", "0.0.0.0", "--port", "8064"]
+

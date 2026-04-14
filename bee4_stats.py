@@ -1,5 +1,5 @@
-"""
-ema11_stats.py
+﻿"""
+bee4_stats.py
 ==============
 Statystyki, raportowanie, rozbicie fee i PnL.
 
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
-from ema11_params import FEE_RATE, INITIAL_CAPITAL
+from bee4_params import FEE_RATE, INITIAL_CAPITAL
 
 
 def _fmt(val, decimals=2, pct=False):
@@ -34,7 +34,7 @@ def compute_stats(
     trades         : pd.DataFrame,
     equity         : pd.DataFrame,
     initial_capital: float = INITIAL_CAPITAL,
-    label          : str   = "RSI + TMA(RSI) + EMA TREND",
+    label          : str   = "Bee4 WaveTrend",
     print_output   : bool  = True,
 ) -> dict:
     stats = {}
@@ -227,22 +227,39 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
     print(f"  Mediana zwrotu:          {med_ret:.3f}%")
 
     print("\n  Rozkład parametrów:")
-    for col, lbl in [("best_tp","TP"),("best_sl","SL"),
-                     ("best_trail","TRAIL"),("best_ema_len","EMA")]:
+    for col, lbl in [
+        ("best_wt_channel_len", "Channel"),
+        ("best_wt_avg_len", "Average"),
+        ("best_wt_signal_len", "Signal"),
+        ("best_wt_min_signal_level", "Min level"),
+    ]:
         if col in windows_df.columns:
             vals = windows_df[col].value_counts().sort_index()
             print(f"    {lbl:8s}: " + "  ".join(f"{k}→{v}" for k, v in vals.items()))
 
     print("\n  Śr. zwrot wg parametrów:")
-    for col, lbl in [("best_tp","TP"),("best_sl","SL"),
-                     ("best_trail","TRAIL"),("best_ema_len","EMA")]:
+    for col, lbl in [
+        ("best_wt_channel_len", "Channel"),
+        ("best_wt_avg_len", "Average"),
+        ("best_wt_signal_len", "Signal"),
+        ("best_wt_min_signal_level", "Min level"),
+    ]:
         if col in windows_df.columns:
             avg = windows_df.groupby(col)["live_return_pct"].mean()
             print(f"    {lbl:8s}: " + "  ".join(f"{k}={v:.3f}%" for k, v in avg.items()))
 
     print("\n  Ostatnie 10 okien:")
-    cols = [c for c in ["window_id","live_start","live_end","best_tp","best_sl",
-                        "best_trail","best_ema_len","live_return_pct","n_trades_live"]
+    cols = [c for c in [
+        "window_id",
+        "live_start",
+        "live_end",
+        "best_wt_channel_len",
+        "best_wt_avg_len",
+        "best_wt_signal_len",
+        "best_wt_min_signal_level",
+        "live_return_pct",
+        "n_trades_live",
+    ]
             if c in windows_df.columns]
     print(windows_df[cols].tail(10).to_string(index=False))
     print("=" * 62)
@@ -352,3 +369,4 @@ def print_extended_report(
     ft = fee_summary_by_period(trades, initial_capital, "ME")
     if not ft.empty:
         print(ft.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+

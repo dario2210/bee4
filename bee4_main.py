@@ -1,5 +1,5 @@
-"""
-ema11_main.py
+﻿"""
+bee4_main.py
 =============
 Entry point for the first bee4 WaveTrend strategy.
 """
@@ -10,9 +10,9 @@ import argparse
 
 import pandas as pd
 
-from ema11_binance import update_csv_cache, wfo_bars
-from ema11_data import load_klines, prepare_indicators
-from ema11_params import (
+from bee4_binance import update_csv_cache, wfo_bars
+from bee4_data import load_klines, prepare_indicators
+from bee4_params import (
     BINANCE_CSV_CACHE,
     BINANCE_INTERVAL,
     BINANCE_MARKET,
@@ -26,9 +26,9 @@ from ema11_params import (
     load_params,
     save_params,
 )
-from ema11_stats import compute_stats, fee_summary_by_period, print_wfo_windows
-from ema11_strategy import EMA11Strategy
-from ema11_wfo import get_latest_best_params, walk_forward_optimization
+from bee4_stats import compute_stats, fee_summary_by_period, print_wfo_windows
+from bee4_strategy import Bee4Strategy
+from bee4_wfo import get_latest_best_params, walk_forward_optimization
 
 
 def run_backtest(
@@ -52,7 +52,7 @@ def run_backtest(
     print(f"\n[BACKTEST] Data: {df['time'].iloc[0]} -> {df['time'].iloc[-1]} ({len(df)} candles)")
     print(f"[BACKTEST] Params: {params}\n")
 
-    strat = EMA11Strategy(params)
+    strat = Bee4Strategy(params)
     trades, equity, final_cap = strat.run(df, INITIAL_CAPITAL)
 
     compute_stats(trades, equity, INITIAL_CAPITAL, label="BACKTEST - WaveTrend")
@@ -65,9 +65,9 @@ def run_backtest(
             print(fee_table.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
     if save:
-        trades.to_csv("ema11_backtest_trades.csv", index=False)
-        equity.to_csv("ema11_backtest_equity.csv", index=False)
-        print("\n[SAVE] ema11_backtest_trades.csv, ema11_backtest_equity.csv")
+        trades.to_csv("bee4_backtest_trades.csv", index=False)
+        equity.to_csv("bee4_backtest_equity.csv", index=False)
+        print("\n[SAVE] bee4_backtest_trades.csv, bee4_backtest_equity.csv")
 
 
 def run_wfo(
@@ -101,12 +101,12 @@ def run_wfo(
 
     if save:
         if all_trades is not None and not all_trades.empty:
-            all_trades.to_csv("ema11_wfo_trades.csv", index=False)
+            all_trades.to_csv("bee4_wfo_trades.csv", index=False)
         if equity_wfo is not None:
-            equity_wfo.to_csv("ema11_wfo_equity.csv", index=False)
+            equity_wfo.to_csv("bee4_wfo_equity.csv", index=False)
         if windows_df is not None and not windows_df.empty:
-            windows_df.to_csv("ema11_wfo_windows.csv", index=False)
-        print("[SAVE] ema11_wfo_trades.csv, ema11_wfo_equity.csv, ema11_wfo_windows.csv")
+            windows_df.to_csv("bee4_wfo_windows.csv", index=False)
+        print("[SAVE] bee4_wfo_trades.csv, bee4_wfo_equity.csv, bee4_wfo_windows.csv")
 
 
 def parse_args() -> argparse.Namespace:
@@ -168,3 +168,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

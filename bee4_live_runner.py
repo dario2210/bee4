@@ -1,5 +1,5 @@
-"""
-ema11_live_runner.py
+﻿"""
+bee4_live_runner.py
 ====================
 Paper/live runner for the first bee4 WaveTrend strategy.
 It uses the exact same engine functions as the backtest.
@@ -16,9 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ema11_binance import update_csv_cache
-from ema11_data import prepare_indicators
-from ema11_engine import (
+from bee4_binance import update_csv_cache
+from bee4_data import prepare_indicators
+from bee4_engine import (
     PositionState,
     apply_slippage,
     bar_from_row as _bar_from_row,
@@ -26,7 +26,7 @@ from ema11_engine import (
     generate_entry_signal,
     generate_exit_signal,
 )
-from ema11_params import (
+from bee4_params import (
     BINANCE_INTERVAL,
     BINANCE_MARKET,
     BINANCE_SYMBOL,
@@ -35,9 +35,9 @@ from ema11_params import (
     load_params,
 )
 
-STATE_FILE = "ema11_live_state.json"
-TRADES_LOG = "ema11_live_trades.jsonl"
-LOG_FILE = "ema11_live_runner.log"
+STATE_FILE = "bee4_live_state.json"
+TRADES_LOG = "bee4_live_trades.jsonl"
+LOG_FILE = "bee4_live_runner.log"
 LOOP_SLEEP_SEC = 60
 
 MAX_DAILY_LOSS_PCT = 3.0
@@ -329,3 +329,4 @@ if __name__ == "__main__":
         sys.exit(0)
 
     main_loop(mode=args.mode)
+

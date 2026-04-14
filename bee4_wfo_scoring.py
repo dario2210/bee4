@@ -1,5 +1,5 @@
-"""
-ema11_wfo_scoring.py
+﻿"""
+bee4_wfo_scoring.py
 ====================
 Funkcje scoringu dla WFO (punkt 5 z briefu).
 
@@ -9,7 +9,7 @@ Tryby:
   defensive    – nacisk na drawdown i stabilność, penalty za wysokie DD
 
 Użycie:
-  from ema11_wfo_scoring import score_params
+  from bee4_wfo_scoring import score_params
   score = score_params(trades, final_cap, initial_cap, mode="balanced")
 """
 
@@ -107,3 +107,4 @@ def score_params(
 
     # fallback → balanced
     return ret_pct
+

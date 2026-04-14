@@ -54,7 +54,7 @@
   }
 
   function ensureChart(container) {
-    const current = window.__bee1LightweightChart;
+    const current = window.__bee4LightweightChart;
     if (current && current.container === container) {
       return current;
     }
@@ -64,8 +64,8 @@
     }
 
     container.innerHTML = "";
-    window.__bee1LightweightChart = buildChartState(container);
-    return window.__bee1LightweightChart;
+    window.__bee4LightweightChart = buildChartState(container);
+    return window.__bee4LightweightChart;
   }
 
   function syncLineSeries(state, lines) {
@@ -139,8 +139,9 @@
   }
 
   window.dash_clientside = Object.assign({}, window.dash_clientside, {
-    bee1_dashboard: {
+    bee4_dashboard: {
       render: render,
     },
   });
 })();
+

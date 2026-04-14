@@ -1,5 +1,5 @@
-"""
-ema11_engine.py
+﻿"""
+bee4_engine.py
 ===============
 Shared decision layer for the first bee4 WaveTrend strategy.
 """
@@ -11,8 +11,8 @@ from typing import Literal, Optional
 
 import numpy as np
 
-from ema11_data import wt_columns
-from ema11_params import WT_ZERO_LINE
+from bee4_data import wt_columns
+from bee4_params import WT_ZERO_LINE
 
 Side = Literal["long", "short"]
 Action = Literal["none", "open_long", "open_short", "close_reverse", "close_force"]
@@ -241,3 +241,4 @@ def bar_from_row(row, params: dict) -> BarData:
         wt2=wt2,
         wt_delta=float(wt1 - wt2) if not np.isnan(wt1) and not np.isnan(wt2) else np.nan,
     )
+

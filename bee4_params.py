@@ -1,5 +1,5 @@
-"""
-ema11_params.py
+﻿"""
+bee4_params.py
 ===============
 Central configuration for the first bee4 WaveTrend strategy.
 
@@ -68,7 +68,7 @@ DEFAULT_PARAMS = {
     "max_bars_in_trade": 0,
 }
 
-WFO_BEST_PARAMS_PATH = "ema11_wfo_best_params.json"
+WFO_BEST_PARAMS_PATH = "bee4_wfo_best_params.json"
 
 
 def load_params() -> dict:
@@ -102,3 +102,4 @@ def save_params(params: dict, path: str = WFO_BEST_PARAMS_PATH) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(params, f, indent=2)
     print(f"[params] Saved params -> {path}")
+

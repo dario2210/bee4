@@ -1,5 +1,5 @@
-"""
-ema11_strategy.py
+﻿"""
+bee4_strategy.py
 =================
 Backtest layer for the first bee4 WaveTrend strategy.
 """
@@ -12,7 +12,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from ema11_engine import (
+from bee4_engine import (
     PositionState,
     Signal,
     apply_slippage,
@@ -21,7 +21,7 @@ from ema11_engine import (
     generate_entry_signal,
     generate_exit_signal,
 )
-from ema11_params import FEE_RATE
+from bee4_params import FEE_RATE
 
 
 @dataclass
@@ -56,7 +56,7 @@ class TradeRecord:
     exit_trigger: str = ""
 
 
-class EMA11Strategy:
+class Bee4Strategy:
     """WaveTrend crossover strategy used by backtest, WFO and live runner."""
 
     def __init__(self, params: dict, fee_rate: float = FEE_RATE):
@@ -220,3 +220,4 @@ class EMA11Strategy:
         equity_df = pd.DataFrame(equity_curve, columns=["time", "equity"])
         equity_df = equity_df.dropna(subset=["time"]).reset_index(drop=True)
         return trades_df, equity_df, capital
+
