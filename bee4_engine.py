@@ -27,6 +27,11 @@ class BarData:
     wt1: float
     wt2: float
     wt_delta: float
+    ema20: float = np.nan
+    wt_green_dot: bool = False
+    wt_red_dot: bool = False
+    bars_since_wt_green_dot: float = np.nan
+    bars_since_wt_red_dot: float = np.nan
 
 
 @dataclass
@@ -93,6 +98,27 @@ def _signal_level(bar: BarData) -> float:
     return min(abs(bar.wt1), abs(bar.wt2))
 
 
+def _has_recent_signal(value: float, max_bars: int) -> bool:
+    return not np.isnan(value) and value <= float(max_bars)
+
+
+def _flag_value(value) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, float) and np.isnan(value):
+        return False
+    return bool(value)
+
+
+def _float_or_nan(value) -> float:
+    if value is None:
+        return np.nan
+    try:
+        return np.nan if np.isnan(value) else float(value)
+    except TypeError:
+        return float(value)
+
+
 def generate_entry_signal(
     bar: BarData,
     prev_bar: BarData,
@@ -115,14 +141,30 @@ def generate_entry_signal(
     min_level = float(params.get("wt_min_signal_level", 0.0))
     level_now = _signal_level(bar)
 
-    long_cond = (
+    allow_shorts = bool(params.get("allow_shorts", True))
+    entry_window_bars = int(params.get("wt_long_entry_window_bars", 0) or 0)
+    entry_max_above_zero = float(params.get("wt_long_entry_max_above_zero", 0.0))
+    require_ema20_reclaim = bool(params.get("wt_long_require_ema20_reclaim", False))
+    ema20_ok = not require_ema20_reclaim or (not np.isnan(bar.ema20) and bar.close > bar.ema20)
+
+    fresh_long_cross = (
         _cross_up(bar, prev_bar)
         and bar.wt1 < zero_line
         and bar.wt2 < zero_line
         and level_now >= min_level
     )
+    long_reentry_window = (
+        entry_window_bars > 0
+        and _has_recent_signal(bar.bars_since_wt_green_dot, entry_window_bars)
+        and bar.wt1 <= entry_max_above_zero
+        and bar.wt2 <= entry_max_above_zero
+        and level_now >= min_level
+        and ema20_ok
+    )
+    long_cond = (fresh_long_cross and ema20_ok) or long_reentry_window
     short_cond = (
-        _cross_down(bar, prev_bar)
+        allow_shorts
+        and _cross_down(bar, prev_bar)
         and bar.wt1 > zero_line
         and bar.wt2 > zero_line
         and level_now >= min_level
@@ -136,13 +178,21 @@ def generate_entry_signal(
         "entry_signal_level": round(level_now, 4),
         "prev_wt1": round(prev_bar.wt1, 4),
         "prev_wt2": round(prev_bar.wt2, 4),
+        "entry_ema20": round(bar.ema20, 4) if not np.isnan(bar.ema20) else np.nan,
     }
 
     if long_cond:
+        long_reason = "WT_GREEN_DOT_BELOW_ZERO" if fresh_long_cross else "WT_LONG_REENTRY_WINDOW"
         return Signal(
             action="open_long",
-            reason="WT_GREEN_DOT_BELOW_ZERO",
-            meta={**meta, "cross_type": "bullish"},
+            reason=long_reason,
+            meta={
+                **meta,
+                "cross_type": "bullish" if fresh_long_cross else "bullish_reentry",
+                "bars_since_green_dot": round(bar.bars_since_wt_green_dot, 4)
+                if not np.isnan(bar.bars_since_wt_green_dot)
+                else np.nan,
+            },
         )
     if short_cond:
         return Signal(
@@ -184,19 +234,37 @@ def generate_exit_signal(
     if max_bars > 0 and position.bars_in_position >= max_bars:
         return Signal(action="close_force", reason="TIME_STOP", meta=_meta("TIME_STOP"))
 
+    allow_shorts = bool(params.get("allow_shorts", True))
+    long_exit_min_level = float(params.get("wt_long_exit_min_level", zero_line))
+
     opposite_signal = generate_entry_signal(bar, prev_bar, params, None)
-    if position.side == "long" and opposite_signal.action == "open_short":
-        return Signal(
-            action="close_reverse",
-            reason="REVERSE_TO_SHORT",
-            meta=_meta("REVERSE_TO_SHORT"),
-        )
-    if position.side == "short" and opposite_signal.action == "open_long":
-        return Signal(
-            action="close_reverse",
-            reason="REVERSE_TO_LONG",
-            meta=_meta("REVERSE_TO_LONG"),
-        )
+    if position.side == "long":
+        if allow_shorts and opposite_signal.action == "open_short":
+            return Signal(
+                action="close_reverse",
+                reason="REVERSE_TO_SHORT",
+                meta=_meta("REVERSE_TO_SHORT"),
+            )
+        if bar.wt_red_dot and bar.wt1 > long_exit_min_level and bar.wt2 > long_exit_min_level:
+            return Signal(
+                action="close_force",
+                reason="WT_RED_DOT_EXIT_LONG",
+                meta=_meta("WT_RED_DOT_EXIT_LONG"),
+            )
+
+    if position.side == "short":
+        if opposite_signal.action == "open_long":
+            return Signal(
+                action="close_reverse",
+                reason="REVERSE_TO_LONG",
+                meta=_meta("REVERSE_TO_LONG"),
+            )
+        if not allow_shorts and bar.wt_green_dot and bar.wt1 < zero_line and bar.wt2 < zero_line:
+            return Signal(
+                action="close_force",
+                reason="WT_GREEN_DOT_EXIT_SHORT",
+                meta=_meta("WT_GREEN_DOT_EXIT_SHORT"),
+            )
 
     return Signal(action="none")
 
@@ -233,6 +301,8 @@ def bar_from_row(row, params: dict) -> BarData:
     wt2 = row[wt2_col] if wt2_col in row.index else row.get("wt2", np.nan)
     wt1 = float(wt1) if not np.isnan(wt1) else np.nan
     wt2 = float(wt2) if not np.isnan(wt2) else np.nan
+    bars_since_wt_green_dot = row.get("bars_since_wt_green_dot", np.nan)
+    bars_since_wt_red_dot = row.get("bars_since_wt_red_dot", np.nan)
 
     return BarData(
         time=row["time"],
@@ -240,5 +310,14 @@ def bar_from_row(row, params: dict) -> BarData:
         wt1=wt1,
         wt2=wt2,
         wt_delta=float(wt1 - wt2) if not np.isnan(wt1) and not np.isnan(wt2) else np.nan,
+        ema20=_float_or_nan(row.get("ema20", np.nan)),
+        wt_green_dot=_flag_value(row.get("wt_green_dot", False)),
+        wt_red_dot=_flag_value(row.get("wt_red_dot", False)),
+        bars_since_wt_green_dot=(
+            _float_or_nan(bars_since_wt_green_dot)
+        ),
+        bars_since_wt_red_dot=(
+            _float_or_nan(bars_since_wt_red_dot)
+        ),
     )
 

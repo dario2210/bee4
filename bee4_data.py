@@ -31,6 +31,16 @@ def wt_columns(channel_len: int, avg_len: int, signal_len: int) -> tuple[str, st
     return wt1_column(channel_len, avg_len), wt2_column(channel_len, avg_len, signal_len)
 
 
+def _bars_since_flag(flag: pd.Series) -> pd.Series:
+    values: list[float] = []
+    last_idx: int | None = None
+    for idx, is_true in enumerate(flag.fillna(False).astype(bool).to_list()):
+        if is_true:
+            last_idx = idx
+        values.append(np.nan if last_idx is None else float(idx - last_idx))
+    return pd.Series(values, index=flag.index, dtype="float64")
+
+
 def compute_wave_trend(
     df: pd.DataFrame,
     channel_len: int,
@@ -62,8 +72,10 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
       - hlc3
       - wt1_cX_aY
       - wt2_cX_aY_sZ
+      - ema20
       - wt1, wt2, wt_delta
       - wt_green_dot, wt_red_dot
+      - bars_since_wt_green_dot, bars_since_wt_red_dot
     """
     df = df.copy()
     df["hlc3"] = (df["high"] + df["low"] + df["close"]) / 3.0
@@ -87,11 +99,14 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df[wt2_column(channel_len, avg_len, signal_len)] = wt1.rolling(int(signal_len)).mean()
 
     default_wt1_col, default_wt2_col = wt_columns(WT_CHANNEL_LEN, WT_AVG_LEN, WT_SIGNAL_LEN)
+    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["wt1"] = df[default_wt1_col]
     df["wt2"] = df[default_wt2_col]
     df["wt_delta"] = df["wt1"] - df["wt2"]
     df["wt_green_dot"] = (df["wt1"].shift(1) <= df["wt2"].shift(1)) & (df["wt1"] > df["wt2"])
     df["wt_red_dot"] = (df["wt1"].shift(1) >= df["wt2"].shift(1)) & (df["wt1"] < df["wt2"])
+    df["bars_since_wt_green_dot"] = _bars_since_flag(df["wt_green_dot"])
+    df["bars_since_wt_red_dot"] = _bars_since_flag(df["wt_red_dot"])
 
     return df
 

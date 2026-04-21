@@ -5,9 +5,11 @@ Dashboard, wykres, flow backtest/WFO/live oraz uklad plikow pozostaja spojne z w
 
 ## Co robi projekt
 
-- otwiera `long`, gdy pojawia sie zielona kropka WaveTrend i obie linie wskaznika sa ponizej zera
-- otwiera `short`, gdy pojawia sie czerwona kropka WaveTrend i obie linie wskaznika sa powyzej zera
-- zamyka pozycje dopiero przy sygnale przeciwnym i od razu odwraca kierunek
+- domyslnie pracuje w trybie `long-only`
+- otwiera `long` na zielonej kropce WaveTrend pod zerem oraz w oknie kilku barow po tym sygnale
+- dodatkowo wymaga odzyskania `EMA20`, zeby odsiac slabse odbicia
+- dopuszcza re-entry, gdy WaveTrend nadal utrzymuje sie nisko i nie wyszedl za wysoko ponad zero
+- zamyka longa na czerwonym zwrocie WaveTrend, gdy obie linie sa nad zerem
 - wspiera backtest, walk-forward optimization oraz live/paper runner
 - zachowuje dashboard z wizualizacja ceny, markerow transakcji oraz panelu `WT1/WT2`
 

@@ -29,6 +29,11 @@ WT_AVG_LEN = 21
 WT_SIGNAL_LEN = 4
 WT_MIN_SIGNAL_LEVEL = 0.0
 WT_ZERO_LINE = 0.0
+ALLOW_SHORTS = False
+WT_LONG_ENTRY_WINDOW_BARS = 3
+WT_LONG_ENTRY_MAX_ABOVE_ZERO = 0.0
+WT_LONG_EXIT_MIN_LEVEL = 0.0
+WT_LONG_REQUIRE_EMA20_RECLAIM = True
 
 # Fees and execution friction
 FEE_RATE = 0.0007
@@ -62,6 +67,11 @@ DEFAULT_PARAMS = {
     "wt_signal_len": WT_SIGNAL_LEN,
     "wt_min_signal_level": WT_MIN_SIGNAL_LEVEL,
     "wt_zero_line": WT_ZERO_LINE,
+    "allow_shorts": ALLOW_SHORTS,
+    "wt_long_entry_window_bars": WT_LONG_ENTRY_WINDOW_BARS,
+    "wt_long_entry_max_above_zero": WT_LONG_ENTRY_MAX_ABOVE_ZERO,
+    "wt_long_exit_min_level": WT_LONG_EXIT_MIN_LEVEL,
+    "wt_long_require_ema20_reclaim": WT_LONG_REQUIRE_EMA20_RECLAIM,
     "fee_rate": FEE_RATE,
     "slippage_bps": 2.0,
     "spread_bps": 1.0,

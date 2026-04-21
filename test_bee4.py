@@ -33,20 +33,46 @@ BASE_PARAMS = {
     "wt_signal_len": 4,
     "wt_min_signal_level": 5.0,
     "wt_zero_line": 0.0,
+    "allow_shorts": False,
+    "wt_long_entry_window_bars": 3,
+    "wt_long_entry_max_above_zero": 0.0,
+    "wt_long_exit_min_level": 0.0,
+    "wt_long_require_ema20_reclaim": True,
     "fee_rate": 0.0007,
     "slippage_bps": 0.0,
     "spread_bps": 0.0,
     "max_bars_in_trade": 0,
 }
 
+LEGACY_BOTH_PARAMS = {
+    **BASE_PARAMS,
+    "allow_shorts": True,
+    "wt_long_entry_window_bars": 0,
+    "wt_long_require_ema20_reclaim": False,
+}
 
-def _make_bar(close=1800.0, wt1=-20.0, wt2=-25.0):
+
+def _make_bar(
+    close=1800.0,
+    wt1=-20.0,
+    wt2=-25.0,
+    ema20=1700.0,
+    wt_green_dot=False,
+    wt_red_dot=False,
+    bars_since_wt_green_dot=np.nan,
+    bars_since_wt_red_dot=np.nan,
+):
     return BarData(
         time=pd.Timestamp("2024-01-01 00:00:00", tz="UTC"),
         close=close,
         wt1=wt1,
         wt2=wt2,
         wt_delta=wt1 - wt2,
+        ema20=ema20,
+        wt_green_dot=wt_green_dot,
+        wt_red_dot=wt_red_dot,
+        bars_since_wt_green_dot=bars_since_wt_green_dot,
+        bars_since_wt_red_dot=bars_since_wt_red_dot,
     )
 
 
@@ -74,10 +100,24 @@ def _signal_df() -> pd.DataFrame:
             "wt1": wt1_vals,
             "wt2": wt2_vals,
             "wt_delta": np.array(wt1_vals) - np.array(wt2_vals),
+            "ema20": pd.Series(closes).ewm(span=20, adjust=False).mean(),
         }
     )
     df["wt_green_dot"] = (df["wt1"].shift(1) <= df["wt2"].shift(1)) & (df["wt1"] > df["wt2"])
     df["wt_red_dot"] = (df["wt1"].shift(1) >= df["wt2"].shift(1)) & (df["wt1"] < df["wt2"])
+    bars_since_green = []
+    bars_since_red = []
+    last_green = None
+    last_red = None
+    for idx, row in df.iterrows():
+        if bool(row["wt_green_dot"]):
+            last_green = idx
+        if bool(row["wt_red_dot"]):
+            last_red = idx
+        bars_since_green.append(np.nan if last_green is None else float(idx - last_green))
+        bars_since_red.append(np.nan if last_red is None else float(idx - last_red))
+    df["bars_since_wt_green_dot"] = bars_since_green
+    df["bars_since_wt_red_dot"] = bars_since_red
     return df
 
 
@@ -99,7 +139,19 @@ class TestWaveTrendPreparation:
         out = prepare_indicators(df)
         wt1_col, wt2_col = wt_columns(10, 21, 4)
 
-        for col in ["hlc3", "wt1", "wt2", "wt_delta", "wt_green_dot", "wt_red_dot", wt1_col, wt2_col]:
+        for col in [
+            "hlc3",
+            "ema20",
+            "wt1",
+            "wt2",
+            "wt_delta",
+            "wt_green_dot",
+            "wt_red_dot",
+            "bars_since_wt_green_dot",
+            "bars_since_wt_red_dot",
+            wt1_col,
+            wt2_col,
+        ]:
             assert col in out.columns
 
         assert out["wt1"].dropna().shape[0] > 0
@@ -114,10 +166,28 @@ class TestEntrySignals:
         assert sig.action == "open_long"
         assert sig.reason == "WT_GREEN_DOT_BELOW_ZERO"
 
+    def test_open_long_in_reentry_window_after_green_dot(self):
+        prev = _make_bar(wt1=-20.0, wt2=-18.0)
+        bar = _make_bar(
+            wt1=-12.0,
+            wt2=-10.0,
+            wt_green_dot=False,
+            bars_since_wt_green_dot=2.0,
+        )
+        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+        assert sig.action == "open_long"
+        assert sig.reason == "WT_LONG_REENTRY_WINDOW"
+
+    def test_no_long_without_ema20_reclaim(self):
+        prev = _make_bar(wt1=-35.0, wt2=-32.0, ema20=1900.0)
+        bar = _make_bar(wt1=-24.0, wt2=-28.0, ema20=1900.0)
+        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+        assert sig.action == "none"
+
     def test_open_short_on_red_dot_above_zero(self):
         prev = _make_bar(wt1=34.0, wt2=30.0)
         bar = _make_bar(wt1=22.0, wt2=27.0)
-        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+        sig = generate_entry_signal(bar, prev, LEGACY_BOTH_PARAMS, None)
         assert sig.action == "open_short"
         assert sig.reason == "WT_RED_DOT_ABOVE_ZERO"
 
@@ -136,11 +206,19 @@ class TestEntrySignals:
 
 
 class TestExitSignals:
-    def test_long_closes_only_on_reverse_short_signal(self):
+    def test_long_closes_on_red_dot_above_zero_in_long_only_mode(self):
+        pos = PositionState("long", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
+        prev = _make_bar(wt1=30.0, wt2=26.0)
+        bar = _make_bar(wt1=22.0, wt2=27.0, wt_red_dot=True)
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+        assert sig.action == "close_force"
+        assert sig.reason == "WT_RED_DOT_EXIT_LONG"
+
+    def test_long_closes_only_on_reverse_short_signal_when_shorts_enabled(self):
         pos = PositionState("long", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
         prev = _make_bar(wt1=30.0, wt2=26.0)
         bar = _make_bar(wt1=22.0, wt2=27.0)
-        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+        sig = generate_exit_signal(bar, prev, LEGACY_BOTH_PARAMS, pos)
         assert sig.action == "close_reverse"
         assert sig.reason == "REVERSE_TO_SHORT"
 
@@ -148,7 +226,7 @@ class TestExitSignals:
         pos = PositionState("short", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
         prev = _make_bar(wt1=-34.0, wt2=-30.0)
         bar = _make_bar(wt1=-24.0, wt2=-28.0)
-        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+        sig = generate_exit_signal(bar, prev, LEGACY_BOTH_PARAMS, pos)
         assert sig.action == "close_reverse"
         assert sig.reason == "REVERSE_TO_LONG"
 
@@ -163,9 +241,9 @@ class TestExitSignals:
 
 
 class TestStrategy:
-    def test_strategy_reverses_on_opposite_signal(self):
+    def test_strategy_reverses_on_opposite_signal_when_shorts_enabled(self):
         df = _signal_df()
-        strat = Bee4Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(LEGACY_BOTH_PARAMS)
         trades, equity, final_cap = strat.run(df, 10_000.0)
 
         assert len(trades) == 3
@@ -178,9 +256,18 @@ class TestStrategy:
 
     def test_capital_after_matches_final_cap(self):
         df = _signal_df()
-        strat = Bee4Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(LEGACY_BOTH_PARAMS)
         trades, _equity, final_cap = strat.run(df, 10_000.0)
         assert trades.iloc[-1]["capital_after"] == pytest.approx(final_cap, abs=1e-8)
+
+    def test_long_only_profile_exits_without_opening_shorts(self):
+        df = _signal_df()
+        strat = Bee4Strategy(BASE_PARAMS)
+        trades, _equity, _final_cap = strat.run(df, 10_000.0)
+
+        assert len(trades) == 1
+        assert set(trades["side"]) == {"long"}
+        assert list(trades["reason"]) == ["WT_RED_DOT_EXIT_LONG"]
 
 
 class TestDataLoading:
