@@ -120,15 +120,15 @@ def hero_banner() -> html.Div:
             html.H2("Bee4 WaveTrend console"),
             html.P(
                 "Bee4 zachowuje dashboard bee1, ale domyslnie pracuje jako "
-                "WaveTrend long-only z re-entry po zielonej kropce i filtrem EMA20."
+                "WaveTrend long/short z lustrzanym re-entry i filtrem EMA20 po obu stronach."
             ),
         ], className="hero-copy"),
         html.Div([
             html.Div("Note", className="hero-note-title"),
             html.P(
-                "Long pojawia sie na zielonej kropce pod zerem oraz przez kilka "
-                "kolejnych barow po tym sygnale, ale dopiero po odzyskaniu EMA20, "
-                "a wyjscie nastepuje na czerwonym zwrocie WaveTrend nad zerem."
+                "Long pojawia sie na zielonej kropce pod zerem po odzyskaniu EMA20, "
+                "short na czerwonej kropce nad zerem po odrzuceniu EMA20, "
+                "a pozycja odwraca sie dopiero na przeciwnym sygnale."
             ),
         ], className="hero-note"),
     ], className="hero-panel")
@@ -938,7 +938,7 @@ def sidebar():
         # nagłówek
         html.Div([
             html.Div("Bee4 Bot",style={"fontSize":"16px","fontWeight":"700","color":C["text"]}),
-            html.Div("WaveTrend long profile",style={"fontSize":"11px","color":C["muted"],"marginTop":"2px"}),
+            html.Div("WaveTrend mirrored profile",style={"fontSize":"11px","color":C["muted"],"marginTop":"2px"}),
         ],style={"marginBottom":"20px","paddingBottom":"14px","borderBottom":f"1px solid {C['border']}"}),
 
         # dane

@@ -119,6 +119,14 @@ def _float_or_nan(value) -> float:
         return float(value)
 
 
+def _ema_filter_ok(bar: BarData, side: Side, required: bool) -> bool:
+    if not required:
+        return True
+    if np.isnan(bar.ema20):
+        return False
+    return bar.close > bar.ema20 if side == "long" else bar.close < bar.ema20
+
+
 def generate_entry_signal(
     bar: BarData,
     prev_bar: BarData,
@@ -129,6 +137,8 @@ def generate_entry_signal(
     Entry logic:
       - long on bullish WaveTrend dot/cross when both lines are below zero
       - short on bearish WaveTrend dot/cross when both lines are above zero
+      - both sides may re-enter for a few bars after the dot if WaveTrend
+        stays near the zero line and the EMA20 filter still agrees
       - optional minimum distance from zero via wt_min_signal_level
     """
     if position is not None:
@@ -142,33 +152,49 @@ def generate_entry_signal(
     level_now = _signal_level(bar)
 
     allow_shorts = bool(params.get("allow_shorts", True))
-    entry_window_bars = int(params.get("wt_long_entry_window_bars", 0) or 0)
-    entry_max_above_zero = float(params.get("wt_long_entry_max_above_zero", 0.0))
-    require_ema20_reclaim = bool(params.get("wt_long_require_ema20_reclaim", False))
-    ema20_ok = not require_ema20_reclaim or (not np.isnan(bar.ema20) and bar.close > bar.ema20)
+    long_entry_window_bars = int(params.get("wt_long_entry_window_bars", 0) or 0)
+    long_entry_max_above_zero = float(params.get("wt_long_entry_max_above_zero", 0.0))
+    long_require_ema20_reclaim = bool(params.get("wt_long_require_ema20_reclaim", False))
+    short_entry_window_bars = int(params.get("wt_short_entry_window_bars", 0) or 0)
+    short_entry_min_below_zero = float(params.get("wt_short_entry_min_below_zero", 0.0))
+    short_require_ema20_reject = bool(params.get("wt_short_require_ema20_reject", False))
+    long_ema_ok = _ema_filter_ok(bar, "long", long_require_ema20_reclaim)
+    short_ema_ok = _ema_filter_ok(bar, "short", short_require_ema20_reject)
 
     fresh_long_cross = (
         _cross_up(bar, prev_bar)
         and bar.wt1 < zero_line
         and bar.wt2 < zero_line
         and level_now >= min_level
+        and long_ema_ok
     )
     long_reentry_window = (
-        entry_window_bars > 0
-        and _has_recent_signal(bar.bars_since_wt_green_dot, entry_window_bars)
-        and bar.wt1 <= entry_max_above_zero
-        and bar.wt2 <= entry_max_above_zero
+        long_entry_window_bars > 0
+        and _has_recent_signal(bar.bars_since_wt_green_dot, long_entry_window_bars)
+        and bar.wt1 <= long_entry_max_above_zero
+        and bar.wt2 <= long_entry_max_above_zero
         and level_now >= min_level
-        and ema20_ok
+        and long_ema_ok
     )
-    long_cond = (fresh_long_cross and ema20_ok) or long_reentry_window
-    short_cond = (
+    fresh_short_cross = (
         allow_shorts
         and _cross_down(bar, prev_bar)
         and bar.wt1 > zero_line
         and bar.wt2 > zero_line
         and level_now >= min_level
+        and short_ema_ok
     )
+    short_reentry_window = (
+        allow_shorts
+        and short_entry_window_bars > 0
+        and _has_recent_signal(bar.bars_since_wt_red_dot, short_entry_window_bars)
+        and bar.wt1 >= short_entry_min_below_zero
+        and bar.wt2 >= short_entry_min_below_zero
+        and level_now >= min_level
+        and short_ema_ok
+    )
+    long_cond = fresh_long_cross or long_reentry_window
+    short_cond = fresh_short_cross or short_reentry_window
 
     meta = {
         "entry_wt1": round(bar.wt1, 4),
@@ -195,10 +221,17 @@ def generate_entry_signal(
             },
         )
     if short_cond:
+        short_reason = "WT_RED_DOT_ABOVE_ZERO" if fresh_short_cross else "WT_SHORT_REENTRY_WINDOW"
         return Signal(
             action="open_short",
-            reason="WT_RED_DOT_ABOVE_ZERO",
-            meta={**meta, "cross_type": "bearish"},
+            reason=short_reason,
+            meta={
+                **meta,
+                "cross_type": "bearish" if fresh_short_cross else "bearish_reentry",
+                "bars_since_red_dot": round(bar.bars_since_wt_red_dot, 4)
+                if not np.isnan(bar.bars_since_wt_red_dot)
+                else np.nan,
+            },
         )
     return Signal(action="none")
 
@@ -211,8 +244,9 @@ def generate_exit_signal(
 ) -> Signal:
     """
     Exit logic:
-      - close long only when the opposite short signal appears
-      - close short only when the opposite long signal appears
+      - in bidirectional mode, close/reverse only on the opposite entry signal
+      - in long-only fallback mode, close long on a red WaveTrend turn above zero
+      - in short-only fallback mode, close short on a green WaveTrend turn below zero
       - optional time stop remains as a safety override when max_bars_in_trade > 0
     """
     position.bars_in_position += 1
@@ -236,6 +270,7 @@ def generate_exit_signal(
 
     allow_shorts = bool(params.get("allow_shorts", True))
     long_exit_min_level = float(params.get("wt_long_exit_min_level", zero_line))
+    short_exit_max_level = float(params.get("wt_short_exit_max_level", zero_line))
 
     opposite_signal = generate_entry_signal(bar, prev_bar, params, None)
     if position.side == "long":
@@ -245,7 +280,12 @@ def generate_exit_signal(
                 reason="REVERSE_TO_SHORT",
                 meta=_meta("REVERSE_TO_SHORT"),
             )
-        if bar.wt_red_dot and bar.wt1 > long_exit_min_level and bar.wt2 > long_exit_min_level:
+        if (
+            not allow_shorts
+            and bar.wt_red_dot
+            and bar.wt1 > long_exit_min_level
+            and bar.wt2 > long_exit_min_level
+        ):
             return Signal(
                 action="close_force",
                 reason="WT_RED_DOT_EXIT_LONG",
@@ -259,7 +299,12 @@ def generate_exit_signal(
                 reason="REVERSE_TO_LONG",
                 meta=_meta("REVERSE_TO_LONG"),
             )
-        if not allow_shorts and bar.wt_green_dot and bar.wt1 < zero_line and bar.wt2 < zero_line:
+        if (
+            not allow_shorts
+            and bar.wt_green_dot
+            and bar.wt1 < short_exit_max_level
+            and bar.wt2 < short_exit_max_level
+        ):
             return Signal(
                 action="close_force",
                 reason="WT_GREEN_DOT_EXIT_SHORT",

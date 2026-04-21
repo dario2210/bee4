@@ -33,22 +33,32 @@ BASE_PARAMS = {
     "wt_signal_len": 4,
     "wt_min_signal_level": 5.0,
     "wt_zero_line": 0.0,
-    "allow_shorts": False,
+    "allow_shorts": True,
     "wt_long_entry_window_bars": 3,
     "wt_long_entry_max_above_zero": 0.0,
     "wt_long_exit_min_level": 0.0,
     "wt_long_require_ema20_reclaim": True,
+    "wt_short_entry_window_bars": 3,
+    "wt_short_entry_min_below_zero": 0.0,
+    "wt_short_exit_max_level": 0.0,
+    "wt_short_require_ema20_reject": True,
     "fee_rate": 0.0007,
     "slippage_bps": 0.0,
     "spread_bps": 0.0,
     "max_bars_in_trade": 0,
 }
 
-LEGACY_BOTH_PARAMS = {
+LONG_ONLY_PARAMS = {
     **BASE_PARAMS,
-    "allow_shorts": True,
+    "allow_shorts": False,
+}
+
+REVERSAL_TEST_PARAMS = {
+    **BASE_PARAMS,
     "wt_long_entry_window_bars": 0,
+    "wt_short_entry_window_bars": 0,
     "wt_long_require_ema20_reclaim": False,
+    "wt_short_require_ema20_reject": False,
 }
 
 
@@ -185,11 +195,31 @@ class TestEntrySignals:
         assert sig.action == "none"
 
     def test_open_short_on_red_dot_above_zero(self):
-        prev = _make_bar(wt1=34.0, wt2=30.0)
-        bar = _make_bar(wt1=22.0, wt2=27.0)
-        sig = generate_entry_signal(bar, prev, LEGACY_BOTH_PARAMS, None)
+        prev = _make_bar(wt1=34.0, wt2=30.0, ema20=1900.0)
+        bar = _make_bar(wt1=22.0, wt2=27.0, ema20=1900.0)
+        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
         assert sig.action == "open_short"
         assert sig.reason == "WT_RED_DOT_ABOVE_ZERO"
+
+    def test_open_short_in_reentry_window_after_red_dot(self):
+        prev = _make_bar(wt1=20.0, wt2=18.0, ema20=1900.0)
+        bar = _make_bar(
+            close=1790.0,
+            wt1=12.0,
+            wt2=10.0,
+            ema20=1850.0,
+            wt_red_dot=False,
+            bars_since_wt_red_dot=2.0,
+        )
+        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+        assert sig.action == "open_short"
+        assert sig.reason == "WT_SHORT_REENTRY_WINDOW"
+
+    def test_no_short_without_ema20_reject(self):
+        prev = _make_bar(wt1=34.0, wt2=30.0, close=1950.0, ema20=1900.0)
+        bar = _make_bar(wt1=22.0, wt2=27.0, close=1950.0, ema20=1900.0)
+        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+        assert sig.action == "none"
 
     def test_no_long_when_cross_is_above_zero(self):
         prev = _make_bar(wt1=3.0, wt2=5.0)
@@ -210,7 +240,7 @@ class TestExitSignals:
         pos = PositionState("long", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
         prev = _make_bar(wt1=30.0, wt2=26.0)
         bar = _make_bar(wt1=22.0, wt2=27.0, wt_red_dot=True)
-        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+        sig = generate_exit_signal(bar, prev, LONG_ONLY_PARAMS, pos)
         assert sig.action == "close_force"
         assert sig.reason == "WT_RED_DOT_EXIT_LONG"
 
@@ -218,7 +248,7 @@ class TestExitSignals:
         pos = PositionState("long", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
         prev = _make_bar(wt1=30.0, wt2=26.0)
         bar = _make_bar(wt1=22.0, wt2=27.0)
-        sig = generate_exit_signal(bar, prev, LEGACY_BOTH_PARAMS, pos)
+        sig = generate_exit_signal(bar, prev, REVERSAL_TEST_PARAMS, pos)
         assert sig.action == "close_reverse"
         assert sig.reason == "REVERSE_TO_SHORT"
 
@@ -226,9 +256,17 @@ class TestExitSignals:
         pos = PositionState("short", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
         prev = _make_bar(wt1=-34.0, wt2=-30.0)
         bar = _make_bar(wt1=-24.0, wt2=-28.0)
-        sig = generate_exit_signal(bar, prev, LEGACY_BOTH_PARAMS, pos)
+        sig = generate_exit_signal(bar, prev, REVERSAL_TEST_PARAMS, pos)
         assert sig.action == "close_reverse"
         assert sig.reason == "REVERSE_TO_LONG"
+
+    def test_short_closes_on_green_dot_below_zero_when_reversal_is_disabled(self):
+        pos = PositionState("short", 1800.0, pd.Timestamp("2024-01-01", tz="UTC"))
+        prev = _make_bar(wt1=-30.0, wt2=-34.0)
+        bar = _make_bar(wt1=-24.0, wt2=-28.0, wt_green_dot=True)
+        sig = generate_exit_signal(bar, prev, LONG_ONLY_PARAMS, pos)
+        assert sig.action == "close_force"
+        assert sig.reason == "WT_GREEN_DOT_EXIT_SHORT"
 
     def test_time_stop_remains_optional_safety(self):
         params = dict(BASE_PARAMS, max_bars_in_trade=2)
@@ -243,7 +281,7 @@ class TestExitSignals:
 class TestStrategy:
     def test_strategy_reverses_on_opposite_signal_when_shorts_enabled(self):
         df = _signal_df()
-        strat = Bee4Strategy(LEGACY_BOTH_PARAMS)
+        strat = Bee4Strategy(REVERSAL_TEST_PARAMS)
         trades, equity, final_cap = strat.run(df, 10_000.0)
 
         assert len(trades) == 3
@@ -256,13 +294,13 @@ class TestStrategy:
 
     def test_capital_after_matches_final_cap(self):
         df = _signal_df()
-        strat = Bee4Strategy(LEGACY_BOTH_PARAMS)
+        strat = Bee4Strategy(REVERSAL_TEST_PARAMS)
         trades, _equity, final_cap = strat.run(df, 10_000.0)
         assert trades.iloc[-1]["capital_after"] == pytest.approx(final_cap, abs=1e-8)
 
     def test_long_only_profile_exits_without_opening_shorts(self):
         df = _signal_df()
-        strat = Bee4Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(LONG_ONLY_PARAMS)
         trades, _equity, _final_cap = strat.run(df, 10_000.0)
 
         assert len(trades) == 1
@@ -393,11 +431,11 @@ class TestBacktestRunnerParity:
 
     def test_same_closed_trades_as_runner(self):
         df = _signal_df()
-        strat = Bee4Strategy(BASE_PARAMS)
+        strat = Bee4Strategy(LONG_ONLY_PARAMS)
         bt_trades, _equity, _final_cap = strat.run(df, 10_000.0)
         bt_real = bt_trades[bt_trades["reason"] != "FORCE_EXIT_END"].reset_index(drop=True)
 
-        runner_trades = self._simulate_runner(df, BASE_PARAMS)
+        runner_trades = self._simulate_runner(df, LONG_ONLY_PARAMS)
 
         assert len(bt_real) == len(runner_trades)
         assert list(bt_real["side"]) == [t["side"] for t in runner_trades]
