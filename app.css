@@ -139,11 +139,21 @@ p {
 .wt-drp .Select-placeholder,
 .wt-drp .Select--single > .Select-control .Select-value,
 .wt-drp .Select--single > .Select-control .Select-value .Select-value-label,
+.wt-drp .Select.has-value.Select--single > .Select-control .Select-value,
+.wt-drp .Select.has-value.Select--single > .Select-control .Select-value .Select-value-label,
+.wt-drp .Select.has-value.is-pseudo-focused.Select--single > .Select-control .Select-value,
+.wt-drp .Select.has-value.is-pseudo-focused.Select--single > .Select-control .Select-value .Select-value-label,
+.wt-drp .Select-control .Select-value,
+.wt-drp .Select-control .Select-value > *,
 .wt-drp .Select-value-label,
+.wt-drp a.Select-value-label,
+.wt-drp a.Select-value-label:hover,
+.wt-drp a.Select-value-label:visited,
 .wt-drp .Select-input > input,
 .wt-drp .Select-option,
 .wt-drp .VirtualizedSelectOption {
   color: #111111 !important;
+  opacity: 1 !important;
 }
 
 .wt-drp .VirtualizedSelectFocusedOption,
