@@ -130,6 +130,28 @@ p {
   color: var(--bee-amber) !important;
 }
 
+.wt-drp .Select-control,
+.wt-drp .Select-menu-outer,
+.wt-drp .Select-menu {
+  color: #111111;
+}
+
+.wt-drp .Select-placeholder,
+.wt-drp .Select--single > .Select-control .Select-value,
+.wt-drp .Select--single > .Select-control .Select-value .Select-value-label,
+.wt-drp .Select-value-label,
+.wt-drp .Select-input > input,
+.wt-drp .Select-option,
+.wt-drp .VirtualizedSelectOption {
+  color: #111111 !important;
+}
+
+.wt-drp .VirtualizedSelectFocusedOption,
+.wt-drp .is-focused:not(.is-open) > .Select-control,
+.wt-drp .is-open > .Select-control {
+  color: #111111 !important;
+}
+
 @media (max-width: 1180px) {
   .hero-panel {
     grid-template-columns: 1fr;
