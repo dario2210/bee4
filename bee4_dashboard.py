@@ -13,16 +13,17 @@ from plotly.subplots import make_subplots
 
 from bee4_params import (
     INITIAL_CAPITAL, FEE_RATE,
-    TP_GRID, SL_GRID, TRAIL_DROP_GRID, EMA_LEN_GRID,
     TMA_LOW_MIN, TMA_LOW_MAX, TMA_HIGH_MIN, TMA_HIGH_MAX,
     OPT_DAYS, LIVE_DAYS,
     BINANCE_SYMBOL, BINANCE_INTERVAL, BINANCE_MARKET, BINANCE_START_DATE,
-    DEFAULT_PARAMS,
+    DEFAULT_PARAMS, save_params,
     WT_CHANNEL_LEN_GRID, WT_AVG_LEN_GRID, WT_SIGNAL_LEN_GRID, WT_MIN_SIGNAL_LEVEL_GRID,
+    WT_REENTRY_WINDOW_GRID, WT_USE_EMA_FILTER_GRID,
+    WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
 )
 from bee4_data     import load_klines, prepare_indicators
 from bee4_strategy import Bee4Strategy
-from bee4_wfo      import walk_forward_optimization
+from bee4_wfo      import get_latest_best_params, walk_forward_optimization
 from bee4_stats    import (
     compute_stats, fee_summary_by_period,
     breakdown_by_side, breakdown_by_period,
@@ -102,6 +103,189 @@ def btn(id_, label, color=C["blue"], text="#fff"):
         "color":text,"padding":"12px 14px","fontSize":"13px","fontWeight":"700",
         "cursor":"pointer","marginBottom":"8px"})
 
+
+def _parse_bool_value(value, default=False) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _clean_selected_values(values, fallback, caster):
+    source = fallback if values is None or len(values) == 0 else values
+    cleaned = []
+    for value in source:
+        casted = _parse_bool_value(value, False) if caster is bool else caster(value)
+        if casted not in cleaned:
+            cleaned.append(casted)
+    return cleaned
+
+
+def _strategy_params_from_controls(
+    channel_len,
+    avg_len,
+    signal_len,
+    min_level,
+    reentry_window,
+    ema_filter,
+    long_zone,
+    short_zone,
+    fee_rate: float,
+    slippage_bps: float,
+) -> dict:
+    params = dict(DEFAULT_PARAMS)
+    use_ema_filter = _parse_bool_value(
+        ema_filter,
+        DEFAULT_PARAMS["wt_long_require_ema20_reclaim"],
+    )
+    reentry_window = int(
+        reentry_window
+        if reentry_window not in (None, "")
+        else DEFAULT_PARAMS["wt_long_entry_window_bars"]
+    )
+    params.update(
+        {
+            "wt_channel_len": int(channel_len if channel_len not in (None, "") else DEFAULT_PARAMS["wt_channel_len"]),
+            "wt_avg_len": int(avg_len if avg_len not in (None, "") else DEFAULT_PARAMS["wt_avg_len"]),
+            "wt_signal_len": int(signal_len if signal_len not in (None, "") else DEFAULT_PARAMS["wt_signal_len"]),
+            "wt_min_signal_level": float(
+                min_level if min_level not in (None, "") else DEFAULT_PARAMS["wt_min_signal_level"]
+            ),
+            "wt_long_entry_window_bars": reentry_window,
+            "wt_short_entry_window_bars": reentry_window,
+            "wt_long_require_ema20_reclaim": use_ema_filter,
+            "wt_short_require_ema20_reject": use_ema_filter,
+            "wt_long_entry_max_above_zero": float(
+                long_zone if long_zone not in (None, "") else DEFAULT_PARAMS["wt_long_entry_max_above_zero"]
+            ),
+            "wt_short_entry_min_below_zero": float(
+                short_zone if short_zone not in (None, "") else DEFAULT_PARAMS["wt_short_entry_min_below_zero"]
+            ),
+            "fee_rate": float(fee_rate),
+            "slippage_bps": float(slippage_bps),
+        }
+    )
+    return params
+
+
+def _grid_overrides_from_controls(
+    channel_grid,
+    avg_grid,
+    signal_grid,
+    min_level_grid,
+    reentry_grid,
+    ema_filter_grid,
+    long_zone_grid,
+    short_zone_grid,
+) -> dict:
+    return {
+        "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
+        "wt_avg_len": _clean_selected_values(avg_grid, WT_AVG_LEN_GRID, int),
+        "wt_signal_len": _clean_selected_values(signal_grid, WT_SIGNAL_LEN_GRID, int),
+        "wt_min_signal_level": _clean_selected_values(min_level_grid, WT_MIN_SIGNAL_LEVEL_GRID, float),
+        "wt_reentry_window_bars": _clean_selected_values(reentry_grid, WT_REENTRY_WINDOW_GRID, int),
+        "wt_use_ema_filter": _clean_selected_values(ema_filter_grid, WT_USE_EMA_FILTER_GRID, bool),
+        "wt_long_entry_max_above_zero": _clean_selected_values(
+            long_zone_grid,
+            WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
+            float,
+        ),
+        "wt_short_entry_min_below_zero": _clean_selected_values(
+            short_zone_grid,
+            WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
+            float,
+        ),
+    }
+
+
+PARAM_SUMMARY_ORDER = [
+    "wt_channel_len",
+    "wt_avg_len",
+    "wt_signal_len",
+    "wt_min_signal_level",
+    "wt_long_entry_window_bars",
+    "wt_long_require_ema20_reclaim",
+    "wt_long_entry_max_above_zero",
+    "wt_short_entry_min_below_zero",
+    "allow_shorts",
+    "fee_rate",
+    "slippage_bps",
+]
+
+PARAM_SUMMARY_LABELS = {
+    "wt_channel_len": "Channel",
+    "wt_avg_len": "Average",
+    "wt_signal_len": "Signal",
+    "wt_min_signal_level": "Min level",
+    "wt_long_entry_window_bars": "Re-entry window",
+    "wt_long_require_ema20_reclaim": "EMA20 filter",
+    "wt_long_entry_max_above_zero": "Long zone max",
+    "wt_short_entry_min_below_zero": "Short zone min",
+    "allow_shorts": "Shorts enabled",
+    "fee_rate": "Fee rate",
+    "slippage_bps": "Slippage bps",
+}
+
+
+def _format_param_value(value):
+    if isinstance(value, bool):
+        return "On" if value else "Off"
+    if isinstance(value, float):
+        return round(value, 4)
+    return value
+
+
+def _params_table_frame(params: dict | None) -> pd.DataFrame:
+    if not params:
+        return pd.DataFrame()
+
+    rows = []
+    for key in PARAM_SUMMARY_ORDER:
+        if key not in params:
+            continue
+        rows.append(
+            {
+                "parametr": PARAM_SUMMARY_LABELS.get(key, key),
+                "wartość": _format_param_value(params[key]),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _params_summary_card(title: str, subtitle: str, params: dict | None) -> html.Div:
+    params_df = _params_table_frame(params)
+    if params_df.empty:
+        return html.Div("Brak parametrów do pokazania.", style={"color": C["muted"]})
+
+    return html.Div([
+        html.Div(title, style={"fontSize": "12px", "color": C["text"], "fontWeight": "600", "marginBottom": "4px"}),
+        html.Div(subtitle, style={"fontSize": "11px", "color": C["muted"], "marginBottom": "10px"}),
+        dash_table.DataTable(
+            data=params_df.to_dict("records"),
+            columns=[{"name": c, "id": c} for c in params_df.columns],
+            style_cell={
+                "background": C["surface"],
+                "color": C["text"],
+                "border": f"1px solid {C['border']}",
+                "fontSize": "12px",
+                "padding": "6px 10px",
+                "textAlign": "left",
+            },
+            style_header={
+                "background": C["surf2"],
+                "color": C["muted"],
+                "fontWeight": "600",
+                "fontSize": "10px",
+                "textTransform": "uppercase",
+                "border": f"1px solid {C['border']}",
+            },
+        ),
+    ], style=card_s)
+
 def mcrd(label, val, sub=None, col=None):
     return html.Div([
         html.Div(label,style={"fontSize":"11px","color":C["muted"],"marginBottom":"4px",
@@ -171,16 +355,36 @@ def fig_wfo(wd):
 
 def fig_pdist(wd):
     if wd is None or wd.empty: return go.Figure(layout=PT)
-    fig=make_subplots(rows=2,cols=2,subplot_titles=["Channel","Average","Signal","Min level"],
-                      vertical_spacing=0.15,horizontal_spacing=0.1)
-    for (col,r,c),clr in zip([("best_wt_channel_len",1,1),("best_wt_avg_len",1,2),
-                               ("best_wt_signal_len",2,1),("best_wt_min_signal_level",2,2)],
-                              [C["blue"],C["green"],C["amber"],C["purple"]]):
-        if col not in wd.columns: continue
-        vc=wd[col].value_counts().sort_index()
-        fig.add_trace(go.Bar(x=[str(v) for v in vc.index],y=vc.values,
-                             marker_color=clr,showlegend=False),row=r,col=c)
-    fig.update_layout(**PT)
+    specs = [
+        ("best_wt_channel_len", "Channel", C["blue"]),
+        ("best_wt_avg_len", "Average", C["green"]),
+        ("best_wt_signal_len", "Signal", C["amber"]),
+        ("best_wt_min_signal_level", "Min level", C["purple"]),
+        ("best_wt_reentry_window_bars", "Re-entry", C["coral"]),
+        ("best_wt_use_ema_filter", "EMA20", C["blue"]),
+        ("best_wt_long_entry_max_above_zero", "Long zone", C["green"]),
+        ("best_wt_short_entry_min_below_zero", "Short zone", C["red"]),
+    ]
+    fig = make_subplots(
+        rows=2,
+        cols=4,
+        subplot_titles=[title for _, title, _ in specs],
+        vertical_spacing=0.16,
+        horizontal_spacing=0.08,
+    )
+    for idx, (col, _title, clr) in enumerate(specs):
+        if col not in wd.columns:
+            continue
+        row = idx // 4 + 1
+        col_idx = idx % 4 + 1
+        vc = wd[col].value_counts().sort_index()
+        labels = ["on" if v is True else "off" if v is False else str(v) for v in vc.index]
+        fig.add_trace(
+            go.Bar(x=labels, y=vc.values, marker_color=clr, showlegend=False),
+            row=row,
+            col=col_idx,
+        )
+    fig.update_layout(**PT, height=560)
     return fig
 
 def fig_fee(fd):
@@ -969,17 +1173,51 @@ def sidebar():
             field("Kapitał (USD)", inp("inp-cap", INITIAL_CAPITAL, type="number", min=100, step=100)),
         ],style=card_s),
 
-        # WFO config
         html.Div([
-            sec("Konfiguracja WFO"),
+            sec("Uruchomienie"),
+            field("Tryb", drp("inp-run-mode", [
+                {"label": "Backtest manualny", "value": "backtest"},
+                {"label": "WFO", "value": "wfo"},
+            ], "wfo")),
             html.Div([
                 html.Div([field("Fee rate %", inp("inp-fee", round(FEE_RATE*100,4),
                                                    type="number",min=0,max=1,step=0.001))],style={"flex":"1"}),
-                html.Div([field("Slippage bps", inp("inp-slip", 0,
+                html.Div([field("Slippage bps", inp("inp-slip", DEFAULT_PARAMS.get("slippage_bps", 0.0),
                                                      type="number",min=0,max=20,step=0.5))],style={"flex":"1"}),
             ],style={"display":"flex","gap":"8px"}),
             html.Div("⚠ fee_ret = −(2×fee)  wejście + wyjście",
                 style={"fontSize":"10px","color":C["amber"],"marginTop":"-6px","marginBottom":"8px"}),
+        ],style=card_s),
+
+        html.Div([
+            sec("Backtest ręczny"),
+            html.Div([
+                html.Div([field("Channel", inp("inp-bt-channel", DEFAULT_PARAMS["wt_channel_len"], type="number", min=2, step=1))], style={"flex":"1"}),
+                html.Div([field("Average", inp("inp-bt-avg", DEFAULT_PARAMS["wt_avg_len"], type="number", min=2, step=1))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("Signal", inp("inp-bt-signal", DEFAULT_PARAMS["wt_signal_len"], type="number", min=2, step=1))], style={"flex":"1"}),
+                html.Div([field("Min level", inp("inp-bt-min-level", DEFAULT_PARAMS["wt_min_signal_level"], type="number", step=1))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
+                html.Div([field("EMA20 filter", drp("inp-bt-ema-filter", [
+                    {"label": "Off", "value": False},
+                    {"label": "On", "value": True},
+                ], DEFAULT_PARAMS["wt_long_require_ema20_reclaim"]))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("Long zone max", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Short zone min", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div(
+                "Te wartości są używane tylko w trybie Backtest manualny.",
+                style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
+            ),
+        ],style=card_s),
+
+        html.Div([
+            sec("Konfiguracja WFO"),
             html.Div([
                 html.Div([field("Opt (dni)", inp("inp-opt", OPT_DAYS,  type="number",min=14,max=365,step=7))],style={"flex":"1"}),
                 html.Div([field("Live (dni)",inp("inp-live",LIVE_DAYS, type="number",min=7, max=90, step=7))],style={"flex":"1"}),
@@ -990,31 +1228,62 @@ def sidebar():
                 {"label":"Defensive",   "value":"defensive"},
             ],"balanced")),
             sec("Siatka Channel"),
-            dcc.Checklist(id="chk-tp",
+            dcc.Checklist(id="chk-grid-channel",
                 options=[{"label":f" {v}","value":v}
-                         for v in [6,8,10,12,14,16]],
-                value=TP_GRID, inline=True,
+                         for v in [8,10,12]],
+                value=[8,10,12], inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Average"),
-            dcc.Checklist(id="chk-sl",
+            dcc.Checklist(id="chk-grid-avg",
                 options=[{"label":f" {v}","value":v}
-                         for v in [10,14,21,28,35,42]],
-                value=SL_GRID, inline=True,
+                         for v in [14,21,28]],
+                value=[14,21,28], inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Signal"),
-            dcc.Checklist(id="chk-trail",
-                options=[{"label":f" {v}","value":v} for v in [2,3,4,5,6]],
-                value=TRAIL_DROP_GRID, inline=True,
+            dcc.Checklist(id="chk-grid-signal",
+                options=[{"label":f" {v}","value":v} for v in [3,4]],
+                value=[3,4], inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Min level"),
-            dcc.Checklist(id="chk-ema",
-                options=[{"label":f" {v:.1f}","value":v} for v in [0.0,5.0,10.0,15.0,20.0]],
-                value=EMA_LEN_GRID, inline=True,
+            dcc.Checklist(id="chk-grid-min-level",
+                options=[{"label":f" {v:.1f}","value":v} for v in [0.0,10.0]],
+                value=[0.0,10.0], inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Siatka Re-entry"),
+            dcc.Checklist(id="chk-grid-reentry",
+                options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
+                value=WT_REENTRY_WINDOW_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Siatka EMA20"),
+            dcc.Checklist(id="chk-grid-ema-filter",
+                options=[
+                    {"label":" Off","value":False},
+                    {"label":" On","value":True},
+                ],
+                value=WT_USE_EMA_FILTER_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Long zone max"),
+            dcc.Checklist(id="chk-grid-long-zone",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID],
+                value=WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Short zone min"),
+            dcc.Checklist(id="chk-grid-short-zone",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID],
+                value=WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            html.Div(
+                "Siatki są zawężone do bardziej praktycznych zakresów, żeby WFO szybciej szukało ustawień re-entry, EMA20 i stref wejścia.",
+                style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
+            ),
         ],id="panel-wfo",style=card_s),
 
         # przyciski
@@ -1062,7 +1331,7 @@ def main_panel():
             dcc.Tab(label="Transakcje",   value="trades",  style=ts,selected_style=ta),
             dcc.Tab(label="Opłaty",       value="fees",    style=ts,selected_style=ta),
             dcc.Tab(label="Okna WFO",     value="wfo-win", style=ts,selected_style=ta),
-            dcc.Tab(label="Param. WFO",   value="wfo-par", style=ts,selected_style=ta),
+            dcc.Tab(label="Parametry",    value="wfo-par", style=ts,selected_style=ta),
             dcc.Tab(label="Breakdown",    value="brkdwn",  style=ts,selected_style=ta),
         ],style={"borderBottom":f"1px solid {C['border']}","marginBottom":"14px"}),
         html.Div(id="tab-content"),
@@ -1202,9 +1471,36 @@ app.clientside_callback(
 )
 
 # ─── Worker thread ─────────────────────────────────────────────────────────────
-def _worker(symbol, tf, market, start, end, capital,
-            fee, slip, opt_days, live_days, score_mode,
-            tp_grid, sl_grid, trail_grid, ema_grid):
+def _worker(
+    symbol,
+    tf,
+    market,
+    start,
+    end,
+    capital,
+    run_mode,
+    fee,
+    slip,
+    opt_days,
+    live_days,
+    score_mode,
+    bt_channel,
+    bt_avg,
+    bt_signal,
+    bt_min_level,
+    bt_reentry,
+    bt_ema_filter,
+    bt_long_zone,
+    bt_short_zone,
+    grid_channel,
+    grid_avg,
+    grid_signal,
+    grid_min_level,
+    grid_reentry,
+    grid_ema_filter,
+    grid_long_zone,
+    grid_short_zone,
+):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
     try:
@@ -1248,26 +1544,70 @@ def _worker(symbol, tf, market, start, end, capital,
             ss(running=False, status="✗ Za mało danych po filtrowaniu.", progress=""); return
 
         fee_rate_val = float(fee if fee is not None and fee != "" else FEE_RATE * 100) / 100.0
-
-        import bee4_params as ep
-        saved = (
-            ep.WT_CHANNEL_LEN_GRID,
-            ep.WT_AVG_LEN_GRID,
-            ep.WT_SIGNAL_LEN_GRID,
-            ep.WT_MIN_SIGNAL_LEVEL_GRID,
-            ep.OPT_DAYS,
-            ep.LIVE_DAYS,
-            ep.INITIAL_CAPITAL,
+        slip_bps_val = float(slip if slip is not None and slip != "" else DEFAULT_PARAMS.get("slippage_bps", 0.0))
+        run_mode = str(run_mode or "wfo").lower()
+        strategy_params = _strategy_params_from_controls(
+            bt_channel,
+            bt_avg,
+            bt_signal,
+            bt_min_level,
+            bt_reentry,
+            bt_ema_filter,
+            bt_long_zone,
+            bt_short_zone,
+            fee_rate_val,
+            slip_bps_val,
         )
-        ep.WT_CHANNEL_LEN_GRID = tp_grid or WT_CHANNEL_LEN_GRID
-        ep.WT_AVG_LEN_GRID = sl_grid or WT_AVG_LEN_GRID
-        ep.WT_SIGNAL_LEN_GRID = trail_grid or WT_SIGNAL_LEN_GRID
-        ep.WT_MIN_SIGNAL_LEVEL_GRID = ema_grid or WT_MIN_SIGNAL_LEVEL_GRID
-        ep.OPT_DAYS        = int(opt_days  or OPT_DAYS)
-        ep.LIVE_DAYS       = int(live_days or LIVE_DAYS)
-        ep.INITIAL_CAPITAL = capital
 
-        ob, lb = wfo_bars(tf, ep.OPT_DAYS, ep.LIVE_DAYS)
+        if run_mode == "backtest":
+            ss(status="Backtest w toku...", progress="")
+            strat = Bee4Strategy(strategy_params, fee_rate=fee_rate_val)
+            trades_bt, equity_bt, _ = strat.run(df, capital)
+            stats = compute_stats(trades_bt, equity_bt, capital, print_output=False)
+            fee_df = fee_summary_by_period(trades_bt, capital, "ME") if not trades_bt.empty else pd.DataFrame()
+            side_bk = breakdown_by_side(trades_bt) if not trades_bt.empty else pd.DataFrame()
+            yr_bk = breakdown_by_period(trades_bt, "YE") if not trades_bt.empty else pd.DataFrame()
+            q_bk = breakdown_by_period(trades_bt, "QE") if not trades_bt.empty else pd.DataFrame()
+            result = {
+                "mode": "backtest",
+                "stats": stats,
+                "capital": capital,
+                "tf": tf,
+                "symbol": symbol,
+                "params_used": strategy_params,
+                "trades": trades_bt.to_dict("records") if not trades_bt.empty else [],
+                "equity": equity_bt.to_dict("records") if equity_bt is not None and not equity_bt.empty else [],
+                "fee_df": fee_df.to_dict("records") if not fee_df.empty else [],
+                "side_bk": side_bk.to_dict("records") if not side_bk.empty else [],
+                "yr_bk": yr_bk.to_dict("records") if not yr_bk.empty else [],
+                "q_bk": q_bk.to_dict("records") if not q_bk.empty else [],
+                "windows_df": [],
+            }
+            n = len(trades_bt)
+            ret = stats.get("net_return_pct", 0)
+            ss(
+                running=False,
+                stop=False,
+                result=result,
+                status=f"✓ Backtest gotowy  |  {n} tradów  |  {ret:+.2f}%",
+                progress="",
+            )
+            return
+
+        opt_days_val = int(opt_days or OPT_DAYS)
+        live_days_val = int(live_days or LIVE_DAYS)
+        grid_overrides = _grid_overrides_from_controls(
+            grid_channel,
+            grid_avg,
+            grid_signal,
+            grid_min_level,
+            grid_reentry,
+            grid_ema_filter,
+            grid_long_zone,
+            grid_short_zone,
+        )
+
+        ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
         total  = max(0, (len(df)-ob)//lb)
         ss(status=f"WFO w toku  |  ~{total} okien...", progress="Okno 0 / "+str(total))
 
@@ -1305,19 +1645,18 @@ def _worker(symbol, tf, market, start, end, capital,
                 pass  # błąd w preview nie powinien przerywać WFO
 
         all_trades, equity_wfo, windows_df, _ = walk_forward_optimization(
-            df, interval=tf, score_mode=score_mode or "balanced", verbose=False,
-            on_window_done=_on_window_done, fee_rate=fee_rate_val
+            df,
+            interval=tf,
+            score_mode=score_mode or "balanced",
+            verbose=False,
+            on_window_done=_on_window_done,
+            fee_rate=fee_rate_val,
+            opt_days=opt_days_val,
+            live_days=live_days_val,
+            initial_capital=capital,
+            base_params=strategy_params,
+            grid_overrides=grid_overrides,
         )
-
-        (
-            ep.WT_CHANNEL_LEN_GRID,
-            ep.WT_AVG_LEN_GRID,
-            ep.WT_SIGNAL_LEN_GRID,
-            ep.WT_MIN_SIGNAL_LEVEL_GRID,
-            ep.OPT_DAYS,
-            ep.LIVE_DAYS,
-            ep.INITIAL_CAPITAL,
-        ) = saved
 
         if gs()["stop"]:
             ss(running=False, status="Zatrzymano.", progress=""); return
@@ -1327,9 +1666,13 @@ def _worker(symbol, tf, market, start, end, capital,
         side_bk = breakdown_by_side(all_trades) if all_trades is not None and not all_trades.empty else pd.DataFrame()
         yr_bk   = breakdown_by_period(all_trades, "YE") if all_trades is not None and not all_trades.empty else pd.DataFrame()
         q_bk    = breakdown_by_period(all_trades, "QE") if all_trades is not None and not all_trades.empty else pd.DataFrame()
+        best_params = get_latest_best_params(windows_df) if windows_df is not None and not windows_df.empty else {}
+        if best_params:
+            save_params(best_params, str(_APP_DIR / "bee4_wfo_best_params.json"))
 
         result = {
             "mode":"wfo","stats":stats,"capital":capital,"tf":tf,"symbol":symbol,
+            "params_used": strategy_params,
             "trades"    : all_trades.to_dict("records")  if all_trades is not None and not all_trades.empty else [],
             "equity"    : equity_wfo.to_dict("records")  if equity_wfo is not None and not equity_wfo.empty else [],
             "fee_df"    : fee_df.to_dict("records")      if not fee_df.empty  else [],
@@ -1337,12 +1680,14 @@ def _worker(symbol, tf, market, start, end, capital,
             "yr_bk"     : yr_bk.to_dict("records")      if not yr_bk.empty   else [],
             "q_bk"      : q_bk.to_dict("records")       if not q_bk.empty    else [],
             "windows_df": windows_df.to_dict("records")  if windows_df is not None and not windows_df.empty else [],
+            "best_params": best_params,
         }
         nw  = len(windows_df) if windows_df is not None and not windows_df.empty else 0
         n   = len(all_trades) if all_trades is not None and not all_trades.empty else 0
         ret = stats.get("net_return_pct", 0)
         ss(running=False, stop=False, result=result,
-           status=f"✓ WFO gotowe  |  {nw} okien  |  {n} tradów  |  {ret:+.2f}%",
+           status=f"✓ WFO gotowe  |  {nw} okien  |  {n} tradów  |  {ret:+.2f}%"
+                  + ("  |  zapisano best params" if best_params else ""),
            progress="")
 
     except Exception as e:
@@ -1444,17 +1789,27 @@ def export_trades(n_clicks, result_data):
     State("inp-sym","value"),  State("inp-tf","value"),
     State("inp-mkt","value"),  State("inp-from","value"),
     State("inp-to","value"),   State("inp-cap","value"),
+    State("inp-run-mode","value"),
     State("inp-fee","value"),  State("inp-slip","value"),
     State("inp-opt","value"),  State("inp-live","value"),
     State("inp-score","value"),
-    State("chk-tp","value"),   State("chk-sl","value"),
-    State("chk-trail","value"),State("chk-ema","value"),
+    State("inp-bt-channel","value"), State("inp-bt-avg","value"),
+    State("inp-bt-signal","value"), State("inp-bt-min-level","value"),
+    State("inp-bt-reentry","value"), State("inp-bt-ema-filter","value"),
+    State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
+    State("chk-grid-channel","value"), State("chk-grid-avg","value"),
+    State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
+    State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
+    State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
     sym, tf, mkt, frm, to, cap,
-    fee, slip, opt, live, score,
-    tp_g, sl_g, trail_g, ema_g):
+    run_mode, fee, slip, opt, live, score,
+    bt_channel, bt_avg, bt_signal, bt_min_level,
+    bt_reentry, bt_ema_filter, bt_long_zone, bt_short_zone,
+    grid_channel, grid_avg, grid_signal, grid_min_level,
+    grid_reentry, grid_ema_filter, grid_long_zone, grid_short_zone):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -1473,8 +1828,12 @@ def on_run_stop(nr, ns,
             mkt or "spot",
             frm, to,
             float(cap or INITIAL_CAPITAL),
+            run_mode or "wfo",
             fee, slip, opt, live, score,
-            tp_g, sl_g, trail_g, ema_g,
+            bt_channel, bt_avg, bt_signal, bt_min_level,
+            bt_reentry, bt_ema_filter, bt_long_zone, bt_short_zone,
+            grid_channel, grid_avg, grid_signal, grid_min_level,
+            grid_reentry, grid_ema_filter, grid_long_zone, grid_short_zone,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj
@@ -1825,11 +2184,29 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
 
         if tab == "wfo-par":
             windows_df = pd.DataFrame(r.get("windows_df", []))
-            return dash.no_update, metrics, html.Div(
-                dcc.Graph(figure=fig_pdist(windows_df), style={"height": "380px"}, config={"displayModeBar": False})
-                if not windows_df.empty
-                else html.Div("Uruchom tryb WFO.", style={"color": C["muted"]})
-            )
+            if str(r.get("mode", "")).lower() == "backtest":
+                return dash.no_update, metrics, _params_summary_card(
+                    "Parametry backtestu manualnego",
+                    "To jest dokładny zestaw ustawień użyty do ostatniego zwykłego backtestu.",
+                    r.get("params_used", {}),
+                )
+
+            if windows_df.empty:
+                return dash.no_update, metrics, html.Div("Uruchom tryb WFO.", style={"color": C["muted"]})
+
+            best_params = r.get("best_params", {})
+            return dash.no_update, metrics, html.Div([
+                dcc.Graph(
+                    figure=fig_pdist(windows_df),
+                    style={"height": "380px"},
+                    config={"displayModeBar": False},
+                ),
+                _params_summary_card(
+                    "Stabilne parametry po WFO",
+                    "To są parametry wyliczone z ostatnich aktywnych okien i zapisywane jako best params.",
+                    best_params,
+                ),
+            ])
 
         if tab == "brkdwn":
             side_df = pd.DataFrame(r.get("side_bk", []))

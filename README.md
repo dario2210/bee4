@@ -13,25 +13,36 @@ Dashboard, wykres, flow backtest/WFO/live oraz uklad plikow pozostaja spojne z w
 - pozycja zamyka sie i odwraca dopiero na przeciwnym sygnale, zgodnie z profilem WaveTrend
 - wspiera backtest, walk-forward optimization oraz live/paper runner
 - zachowuje dashboard z wizualizacja ceny, markerow transakcji oraz panelu `WT1/WT2`
+- pozwala uruchomic zwykly backtest z recznie wybranymi parametrami strategii bez WFO
 
 ## Parametry WFO
 
-W pierwszej wersji strategii testowane sa:
+W aktualnej wersji WFO testowane sa:
 
 - `wt_channel_len`
 - `wt_avg_len`
 - `wt_signal_len`
 - `wt_min_signal_level`
+- `wt_long_entry_window_bars` / `wt_short_entry_window_bars`
+- `wt_long_require_ema20_reclaim` / `wt_short_require_ema20_reject`
+- `wt_long_entry_max_above_zero`
+- `wt_short_entry_min_below_zero`
 
 Domyslna siatka WFO:
 
-- `channel_len`: `8, 10, 12, 14`
-- `avg_len`: `14, 21, 28, 35`
-- `signal_len`: `3, 4, 5`
-- `min_signal_level`: `0, 5, 10, 20`
+- `channel_len`: `8, 10, 12`
+- `avg_len`: `14, 21, 28`
+- `signal_len`: `3, 4`
+- `min_signal_level`: `0, 10`
+- `re-entry window`: `1, 2, 3`
+- `EMA20 filter`: `off, on`
+- `long zone max`: `0, 5, 10`
+- `short zone min`: `-10, -5, 0`
 
-W tej wersji WFO optymalizuje glownie rdzen WaveTrend, a lustrzane filtry wejsc
-`EMA20 + re-entry window` pozostaja na stalych, recznie dobranych wartosciach.
+Dashboard ma teraz dwa osobne tryby:
+
+- `Backtest manualny`, gdzie ustawiasz te parametry recznie i liczysz zwykly backtest
+- `WFO`, gdzie bot szuka najlepszych ustawien na oknie optymalizacyjnym i stosuje je na kolejnym oknie live
 
 ## Najwazniejsze pliki
 

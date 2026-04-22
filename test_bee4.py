@@ -25,6 +25,7 @@ from bee4_engine import (
     generate_exit_signal,
 )
 from bee4_strategy import Bee4Strategy
+from bee4_wfo import get_latest_best_params, walk_forward_optimization
 
 
 BASE_PARAMS = {
@@ -380,6 +381,83 @@ class TestWFOHelpers:
             assert loaded["wt_signal_len"] == BASE_PARAMS["wt_signal_len"]
         finally:
             path.unlink(missing_ok=True)
+
+    def test_get_latest_best_params_includes_new_strategy_filters(self):
+        windows_df = pd.DataFrame(
+            {
+                "best_wt_channel_len": [8, 10, 10, 10, 12],
+                "best_wt_avg_len": [14, 21, 21, 21, 28],
+                "best_wt_signal_len": [3, 4, 4, 4, 5],
+                "best_wt_min_signal_level": [0.0, 10.0, 10.0, 10.0, 20.0],
+                "best_wt_reentry_window_bars": [1, 2, 2, 2, 3],
+                "best_wt_use_ema_filter": [False, True, True, True, False],
+                "best_wt_long_entry_max_above_zero": [0.0, 5.0, 5.0, 5.0, 10.0],
+                "best_wt_short_entry_min_below_zero": [-10.0, -5.0, -5.0, -5.0, 0.0],
+                "n_trades_live": [1, 2, 2, 1, 0],
+            }
+        )
+
+        best = get_latest_best_params(windows_df)
+
+        assert best["wt_channel_len"] == 10
+        assert best["wt_avg_len"] == 21
+        assert best["wt_signal_len"] == 4
+        assert best["wt_min_signal_level"] == pytest.approx(10.0)
+        assert best["wt_long_entry_window_bars"] == 2
+        assert best["wt_short_entry_window_bars"] == 2
+        assert best["wt_long_require_ema20_reclaim"] is True
+        assert best["wt_short_require_ema20_reject"] is True
+        assert best["wt_long_entry_max_above_zero"] == pytest.approx(5.0)
+        assert best["wt_short_entry_min_below_zero"] == pytest.approx(-5.0)
+
+    def test_wfo_accepts_new_grid_overrides(self):
+        times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
+        wave = np.sin(np.linspace(0, 18, len(times)))
+        close = 1800.0 + wave * 90.0 + np.linspace(0.0, 60.0, len(times))
+        df = pd.DataFrame(
+            {
+                "time": times,
+                "open": close,
+                "high": close + 6.0,
+                "low": close - 6.0,
+                "close": close,
+                "volume": 1000.0,
+            }
+        )
+        df = prepare_indicators(df)
+
+        grid_overrides = {
+            "wt_channel_len": [8],
+            "wt_avg_len": [14],
+            "wt_signal_len": [3],
+            "wt_min_signal_level": [0.0],
+            "wt_reentry_window_bars": [2],
+            "wt_use_ema_filter": [True],
+            "wt_long_entry_max_above_zero": [5.0],
+            "wt_short_entry_min_below_zero": [-5.0],
+        }
+
+        _trades, _equity, windows_df, _final_cap = walk_forward_optimization(
+            df,
+            interval="1h",
+            verbose=False,
+            fee_rate=0.0,
+            opt_days=2,
+            live_days=1,
+            initial_capital=10_000.0,
+            base_params=dict(BASE_PARAMS, fee_rate=0.0, slippage_bps=0.0, spread_bps=0.0),
+            grid_overrides=grid_overrides,
+        )
+
+        assert not windows_df.empty
+        assert set(windows_df["best_wt_channel_len"]) == {8}
+        assert set(windows_df["best_wt_avg_len"]) == {14}
+        assert set(windows_df["best_wt_signal_len"]) == {3}
+        assert set(windows_df["best_wt_min_signal_level"]) == {0.0}
+        assert set(windows_df["best_wt_reentry_window_bars"]) == {2}
+        assert set(windows_df["best_wt_use_ema_filter"]) == {True}
+        assert set(windows_df["best_wt_long_entry_max_above_zero"]) == {5.0}
+        assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {-5.0}
 
 
 class TestClosedCandleOnly:

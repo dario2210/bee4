@@ -232,6 +232,10 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_avg_len", "Average"),
         ("best_wt_signal_len", "Signal"),
         ("best_wt_min_signal_level", "Min level"),
+        ("best_wt_reentry_window_bars", "Re-entry"),
+        ("best_wt_use_ema_filter", "EMA20"),
+        ("best_wt_long_entry_max_above_zero", "Long zone"),
+        ("best_wt_short_entry_min_below_zero", "Short zone"),
     ]:
         if col in windows_df.columns:
             vals = windows_df[col].value_counts().sort_index()
@@ -243,6 +247,10 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_avg_len", "Average"),
         ("best_wt_signal_len", "Signal"),
         ("best_wt_min_signal_level", "Min level"),
+        ("best_wt_reentry_window_bars", "Re-entry"),
+        ("best_wt_use_ema_filter", "EMA20"),
+        ("best_wt_long_entry_max_above_zero", "Long zone"),
+        ("best_wt_short_entry_min_below_zero", "Short zone"),
     ]:
         if col in windows_df.columns:
             avg = windows_df.groupby(col)["live_return_pct"].mean()
@@ -257,6 +265,10 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         "best_wt_avg_len",
         "best_wt_signal_len",
         "best_wt_min_signal_level",
+        "best_wt_reentry_window_bars",
+        "best_wt_use_ema_filter",
+        "best_wt_long_entry_max_above_zero",
+        "best_wt_short_entry_min_below_zero",
         "live_return_pct",
         "n_trades_live",
     ]

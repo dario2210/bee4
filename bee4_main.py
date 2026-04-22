@@ -77,11 +77,14 @@ def run_wfo(
     save: bool = False,
     verbose: bool = True,
 ) -> None:
+    base_params = load_params()
     all_trades, equity_wfo, windows_df, _final_cap = walk_forward_optimization(
         df,
         interval=interval,
         verbose=verbose,
-    )
+        initial_capital=INITIAL_CAPITAL,
+        base_params=base_params,
+        )
 
     compute_stats(all_trades, equity_wfo, INITIAL_CAPITAL, label="WFO - WaveTrend live windows")
     print_wfo_windows(windows_df)

@@ -22,13 +22,31 @@ from bee4_params import (
     WT_AVG_LEN_GRID,
     WT_CHANNEL_LEN,
     WT_CHANNEL_LEN_GRID,
+    WT_LONG_ENTRY_MAX_ABOVE_ZERO,
+    WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
+    WT_LONG_ENTRY_WINDOW_BARS,
+    WT_LONG_REQUIRE_EMA20_RECLAIM,
     WT_MIN_SIGNAL_LEVEL,
     WT_MIN_SIGNAL_LEVEL_GRID,
     WT_SIGNAL_LEN,
     WT_SIGNAL_LEN_GRID,
+    WT_REENTRY_WINDOW_GRID,
+    WT_SHORT_ENTRY_MIN_BELOW_ZERO,
+    WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
+    WT_USE_EMA_FILTER_GRID,
 )
 from bee4_strategy import Bee4Strategy
 from bee4_wfo_scoring import score_params
+
+
+def _clean_grid(values, fallback, caster):
+    source = fallback if values is None or len(values) == 0 else values
+    cleaned = []
+    for value in source:
+        casted = bool(value) if caster is bool else caster(value)
+        if casted not in cleaned:
+            cleaned.append(casted)
+    return cleaned
 
 
 def walk_forward_optimization(
@@ -38,15 +56,39 @@ def walk_forward_optimization(
     verbose: bool = True,
     on_window_done=None,
     fee_rate: float = FEE_RATE,
+    opt_days: int = OPT_DAYS,
+    live_days: int = LIVE_DAYS,
+    initial_capital: float = INITIAL_CAPITAL,
+    base_params: Optional[dict] = None,
+    grid_overrides: Optional[dict] = None,
 ) -> tuple[pd.DataFrame, Optional[pd.DataFrame], pd.DataFrame, float]:
     """Run WFO over precomputed WaveTrend indicator data."""
-    opt_bars, live_bars = wfo_bars(interval, OPT_DAYS, LIVE_DAYS)
-    opt_capital = 10_000.0
+    opt_bars, live_bars = wfo_bars(interval, opt_days, live_days)
+    opt_capital = float(initial_capital)
+    base_params = dict(base_params or {})
+    grid_overrides = grid_overrides or {}
+
+    channel_grid = _clean_grid(grid_overrides.get("wt_channel_len"), WT_CHANNEL_LEN_GRID, int)
+    avg_grid = _clean_grid(grid_overrides.get("wt_avg_len"), WT_AVG_LEN_GRID, int)
+    signal_grid = _clean_grid(grid_overrides.get("wt_signal_len"), WT_SIGNAL_LEN_GRID, int)
+    min_level_grid = _clean_grid(grid_overrides.get("wt_min_signal_level"), WT_MIN_SIGNAL_LEVEL_GRID, float)
+    reentry_grid = _clean_grid(grid_overrides.get("wt_reentry_window_bars"), WT_REENTRY_WINDOW_GRID, int)
+    ema_filter_grid = _clean_grid(grid_overrides.get("wt_use_ema_filter"), WT_USE_EMA_FILTER_GRID, bool)
+    long_zone_grid = _clean_grid(
+        grid_overrides.get("wt_long_entry_max_above_zero"),
+        WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
+        float,
+    )
+    short_zone_grid = _clean_grid(
+        grid_overrides.get("wt_short_entry_min_below_zero"),
+        WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
+        float,
+    )
 
     n = len(df)
     start = 0
     window_id = 0
-    current_capital = INITIAL_CAPITAL
+    current_capital = float(initial_capital)
 
     all_live_trades: list[pd.DataFrame] = []
     global_equity: Optional[pd.DataFrame] = None
@@ -56,7 +98,7 @@ def walk_forward_optimization(
     if verbose:
         print(
             f"[WFO] candles={n} | windows~={total_windows} | "
-            f"opt={OPT_DAYS}d ({opt_bars} bars) | live={LIVE_DAYS}d ({live_bars} bars) | "
+            f"opt={opt_days}d ({opt_bars} bars) | live={live_days}d ({live_bars} bars) | "
             f"score_mode={score_mode}"
         )
         print("-" * 70)
@@ -70,24 +112,37 @@ def walk_forward_optimization(
         best_opt_trades = None
         best_opt_cap = opt_capital
 
-        for wt_channel_len in WT_CHANNEL_LEN_GRID:
-            for wt_avg_len in WT_AVG_LEN_GRID:
-                for wt_signal_len in WT_SIGNAL_LEN_GRID:
-                    for wt_min_signal_level in WT_MIN_SIGNAL_LEVEL_GRID:
-                        params = {
-                            "wt_channel_len": wt_channel_len,
-                            "wt_avg_len": wt_avg_len,
-                            "wt_signal_len": wt_signal_len,
-                            "wt_min_signal_level": wt_min_signal_level,
-                        }
-                        strat = Bee4Strategy(params, fee_rate=fee_rate)
-                        trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
-                        score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
-                        if score > best_score:
-                            best_score = score
-                            best_params = params
-                            best_opt_trades = trades_opt
-                            best_opt_cap = final_cap_opt
+        for wt_channel_len in channel_grid:
+            for wt_avg_len in avg_grid:
+                for wt_signal_len in signal_grid:
+                    for wt_min_signal_level in min_level_grid:
+                        for wt_reentry_window_bars in reentry_grid:
+                            for wt_use_ema_filter in ema_filter_grid:
+                                for wt_long_entry_max_above_zero in long_zone_grid:
+                                    for wt_short_entry_min_below_zero in short_zone_grid:
+                                        params = dict(base_params)
+                                        params.update(
+                                            {
+                                                "wt_channel_len": wt_channel_len,
+                                                "wt_avg_len": wt_avg_len,
+                                                "wt_signal_len": wt_signal_len,
+                                                "wt_min_signal_level": wt_min_signal_level,
+                                                "wt_long_entry_window_bars": wt_reentry_window_bars,
+                                                "wt_short_entry_window_bars": wt_reentry_window_bars,
+                                                "wt_long_require_ema20_reclaim": bool(wt_use_ema_filter),
+                                                "wt_short_require_ema20_reject": bool(wt_use_ema_filter),
+                                                "wt_long_entry_max_above_zero": wt_long_entry_max_above_zero,
+                                                "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
+                                            }
+                                        )
+                                        strat = Bee4Strategy(params, fee_rate=fee_rate)
+                                        trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
+                                        score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
+                                        if score > best_score:
+                                            best_score = score
+                                            best_params = params
+                                            best_opt_trades = trades_opt
+                                            best_opt_cap = final_cap_opt
 
         if best_params is None:
             if verbose:
@@ -117,6 +172,10 @@ def walk_forward_optimization(
             trades_live["wt_avg_len"] = best_params["wt_avg_len"]
             trades_live["wt_signal_len"] = best_params["wt_signal_len"]
             trades_live["wt_min_signal_level"] = best_params["wt_min_signal_level"]
+            trades_live["wt_reentry_window_bars"] = best_params["wt_long_entry_window_bars"]
+            trades_live["wt_use_ema_filter"] = best_params["wt_long_require_ema20_reclaim"]
+            trades_live["wt_long_entry_max_above_zero"] = best_params["wt_long_entry_max_above_zero"]
+            trades_live["wt_short_entry_min_below_zero"] = best_params["wt_short_entry_min_below_zero"]
             all_live_trades.append(trades_live)
 
         if equity_live is not None and not equity_live.empty:
@@ -138,6 +197,10 @@ def walk_forward_optimization(
                 "best_wt_avg_len": best_params["wt_avg_len"],
                 "best_wt_signal_len": best_params["wt_signal_len"],
                 "best_wt_min_signal_level": best_params["wt_min_signal_level"],
+                "best_wt_reentry_window_bars": best_params["wt_long_entry_window_bars"],
+                "best_wt_use_ema_filter": best_params["wt_long_require_ema20_reclaim"],
+                "best_wt_long_entry_max_above_zero": best_params["wt_long_entry_max_above_zero"],
+                "best_wt_short_entry_min_below_zero": best_params["wt_short_entry_min_below_zero"],
                 "opt_score": best_score,
                 "opt_return_pct": opt_ret_pct,
                 "opt_pf": opt_pf,
@@ -156,7 +219,11 @@ def walk_forward_optimization(
                 f"{live_slice['time'].iloc[-1].strftime('%Y-%m-%d')} | "
                 f"ret={live_ret_pct:+.2f}% tr={n_trades_live} "
                 f"ch={best_params['wt_channel_len']} avg={best_params['wt_avg_len']} "
-                f"sig={best_params['wt_signal_len']} minlvl={best_params['wt_min_signal_level']:.1f}"
+                f"sig={best_params['wt_signal_len']} minlvl={best_params['wt_min_signal_level']:.1f} "
+                f"re={best_params['wt_long_entry_window_bars']} "
+                f"ema={'on' if best_params['wt_long_require_ema20_reclaim'] else 'off'} "
+                f"lz={best_params['wt_long_entry_max_above_zero']:.1f} "
+                f"sz={best_params['wt_short_entry_min_below_zero']:.1f}"
             )
 
         if on_window_done is not None:
@@ -196,9 +263,29 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
     avg_len = int(recent["best_wt_avg_len"].mode().iloc[0]) if "best_wt_avg_len" in recent.columns else WT_AVG_LEN
     signal_len = int(recent["best_wt_signal_len"].mode().iloc[0]) if "best_wt_signal_len" in recent.columns else WT_SIGNAL_LEN
     min_signal_level = (
-        float(recent["best_wt_min_signal_level"].median())
+        float(recent["best_wt_min_signal_level"].mode().iloc[0])
         if "best_wt_min_signal_level" in recent.columns
         else WT_MIN_SIGNAL_LEVEL
+    )
+    reentry_window = (
+        int(recent["best_wt_reentry_window_bars"].mode().iloc[0])
+        if "best_wt_reentry_window_bars" in recent.columns
+        else WT_LONG_ENTRY_WINDOW_BARS
+    )
+    use_ema_filter = (
+        bool(recent["best_wt_use_ema_filter"].mode().iloc[0])
+        if "best_wt_use_ema_filter" in recent.columns
+        else WT_LONG_REQUIRE_EMA20_RECLAIM
+    )
+    long_entry_max_above_zero = (
+        float(recent["best_wt_long_entry_max_above_zero"].mode().iloc[0])
+        if "best_wt_long_entry_max_above_zero" in recent.columns
+        else WT_LONG_ENTRY_MAX_ABOVE_ZERO
+    )
+    short_entry_min_below_zero = (
+        float(recent["best_wt_short_entry_min_below_zero"].mode().iloc[0])
+        if "best_wt_short_entry_min_below_zero" in recent.columns
+        else WT_SHORT_ENTRY_MIN_BELOW_ZERO
     )
 
     return {
@@ -206,5 +293,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_avg_len": avg_len,
         "wt_signal_len": signal_len,
         "wt_min_signal_level": min_signal_level,
+        "wt_long_entry_window_bars": reentry_window,
+        "wt_short_entry_window_bars": reentry_window,
+        "wt_long_require_ema20_reclaim": use_ema_filter,
+        "wt_short_require_ema20_reject": use_ema_filter,
+        "wt_long_entry_max_above_zero": long_entry_max_above_zero,
+        "wt_short_entry_min_below_zero": short_entry_min_below_zero,
     }
 
