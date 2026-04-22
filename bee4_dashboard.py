@@ -202,6 +202,13 @@ def _grid_overrides_from_controls(
     }
 
 
+def _grid_combo_count(grid_overrides: dict) -> int:
+    total = 1
+    for values in grid_overrides.values():
+        total *= max(1, len(values))
+    return total
+
+
 PARAM_SUMMARY_ORDER = [
     "wt_channel_len",
     "wt_avg_len",
@@ -1231,27 +1238,27 @@ def sidebar():
             sec("Siatka Channel"),
             dcc.Checklist(id="chk-grid-channel",
                 options=[{"label":f" {v}","value":v}
-                         for v in [8,10,12]],
-                value=[8,10,12], inline=True,
+                         for v in WT_CHANNEL_LEN_GRID],
+                value=WT_CHANNEL_LEN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Average"),
             dcc.Checklist(id="chk-grid-avg",
                 options=[{"label":f" {v}","value":v}
-                         for v in [14,21,28]],
-                value=[14,21,28], inline=True,
+                         for v in WT_AVG_LEN_GRID],
+                value=WT_AVG_LEN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Signal"),
             dcc.Checklist(id="chk-grid-signal",
-                options=[{"label":f" {v}","value":v} for v in [3,4]],
-                value=[3,4], inline=True,
+                options=[{"label":f" {v}","value":v} for v in WT_SIGNAL_LEN_GRID],
+                value=WT_SIGNAL_LEN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Min level"),
             dcc.Checklist(id="chk-grid-min-level",
-                options=[{"label":f" {v:.1f}","value":v} for v in [0.0,10.0]],
-                value=[0.0,10.0], inline=True,
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_GRID],
+                value=WT_MIN_SIGNAL_LEVEL_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Re-entry"),
@@ -1637,10 +1644,25 @@ def _worker(
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
         total  = max(0, (len(df)-ob)//lb)
-        ss(status=f"WFO w toku  |  ~{total} okien...", progress="Okno 0 / "+str(total))
+        combo_total = _grid_combo_count(grid_overrides)
+        ss(
+            status=f"WFO w toku  |  ~{total} okien  |  {combo_total} kombinacji/okno",
+            progress=f"Okno 1 / {max(total, 1)}  |  kombinacja 0 / {combo_total}",
+        )
+
+        def _on_combo_progress(wid, total_windows, combo_idx, combo_total):
+            total_windows = max(int(total_windows or 0), 1)
+            window_no = int(wid) + 1
+            pct = (combo_idx / combo_total * 100.0) if combo_total else 0.0
+            ss(
+                progress=(
+                    f"Okno {window_no} / {total_windows}  |  "
+                    f"kombinacja {combo_idx} / {combo_total}  |  {pct:.0f}%"
+                )
+            )
 
         def _on_window_done(wid, total, wstats, trades_list, equity_sofar, cap_sofar):
-            ss(progress=f"Okno {wid + 1} / {total}")
+            ss(progress=f"Okno {wid + 1} / {total}  |  kombinacja {combo_total} / {combo_total}  |  100%")
             # Zbuduj wynik cząstkowy i od razu go wyświetl
             try:
                 all_tr = pd.concat(trades_list, ignore_index=True) \
@@ -1672,12 +1694,14 @@ def _worker(
             except Exception:
                 pass  # błąd w preview nie powinien przerywać WFO
 
-        all_trades, equity_wfo, windows_df, _ = walk_forward_optimization(
+        all_trades, equity_wfo, windows_df, _final_cap, stopped = walk_forward_optimization(
             df,
             interval=tf,
             score_mode=score_mode or "balanced",
             verbose=False,
             on_window_done=_on_window_done,
+            on_combo_progress=_on_combo_progress,
+            should_stop=lambda: gs()["stop"],
             fee_rate=fee_rate_val,
             opt_days=opt_days_val,
             live_days=live_days_val,
@@ -1685,9 +1709,6 @@ def _worker(
             base_params=strategy_params,
             grid_overrides=grid_overrides,
         )
-
-        if gs()["stop"]:
-            ss(running=False, status="Zatrzymano.", progress=""); return
 
         stats   = compute_stats(all_trades, equity_wfo, capital, print_output=False)
         fee_df  = fee_summary_by_period(all_trades, capital, "ME") if all_trades is not None and not all_trades.empty else pd.DataFrame()
@@ -1713,6 +1734,16 @@ def _worker(
         nw  = len(windows_df) if windows_df is not None and not windows_df.empty else 0
         n   = len(all_trades) if all_trades is not None and not all_trades.empty else 0
         ret = stats.get("net_return_pct", 0)
+        if stopped:
+            ss(
+                running=False,
+                stop=False,
+                result=result,
+                status=f"Zatrzymano  |  ukończone okna {nw}/{total}  |  {n} tradów  |  {ret:+.2f}%",
+                progress="",
+            )
+            return
+
         ss(running=False, stop=False, result=result,
            status=f"✓ WFO gotowe  |  {nw} okien  |  {n} tradów  |  {ret:+.2f}%"
                   + ("  |  zapisano best params" if best_params else ""),

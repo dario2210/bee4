@@ -437,7 +437,7 @@ class TestWFOHelpers:
             "wt_short_entry_min_below_zero": [-5.0],
         }
 
-        _trades, _equity, windows_df, _final_cap = walk_forward_optimization(
+        _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
             df,
             interval="1h",
             verbose=False,
@@ -449,6 +449,7 @@ class TestWFOHelpers:
             grid_overrides=grid_overrides,
         )
 
+        assert stopped is False
         assert not windows_df.empty
         assert set(windows_df["best_wt_channel_len"]) == {8}
         assert set(windows_df["best_wt_avg_len"]) == {14}
@@ -458,6 +459,43 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_use_ema_filter"]) == {True}
         assert set(windows_df["best_wt_long_entry_max_above_zero"]) == {5.0}
         assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {-5.0}
+
+    def test_wfo_can_stop_during_first_window(self):
+        times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
+        wave = np.sin(np.linspace(0, 18, len(times)))
+        close = 1800.0 + wave * 90.0 + np.linspace(0.0, 60.0, len(times))
+        df = pd.DataFrame(
+            {
+                "time": times,
+                "open": close,
+                "high": close + 6.0,
+                "low": close - 6.0,
+                "close": close,
+                "volume": 1000.0,
+            }
+        )
+        df = prepare_indicators(df)
+
+        checks = {"count": 0}
+
+        def should_stop():
+            checks["count"] += 1
+            return checks["count"] >= 5
+
+        _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
+            df,
+            interval="1h",
+            verbose=False,
+            fee_rate=0.0,
+            opt_days=2,
+            live_days=1,
+            initial_capital=10_000.0,
+            base_params=dict(BASE_PARAMS, fee_rate=0.0, slippage_bps=0.0, spread_bps=0.0),
+            should_stop=should_stop,
+        )
+
+        assert stopped is True
+        assert windows_df.empty
 
 
 class TestClosedCandleOnly:

@@ -78,7 +78,7 @@ def run_wfo(
     verbose: bool = True,
 ) -> None:
     base_params = load_params()
-    all_trades, equity_wfo, windows_df, _final_cap = walk_forward_optimization(
+    all_trades, equity_wfo, windows_df, _final_cap, stopped = walk_forward_optimization(
         df,
         interval=interval,
         verbose=verbose,
@@ -110,6 +110,9 @@ def run_wfo(
         if windows_df is not None and not windows_df.empty:
             windows_df.to_csv("bee4_wfo_windows.csv", index=False)
         print("[SAVE] bee4_wfo_trades.csv, bee4_wfo_equity.csv, bee4_wfo_windows.csv")
+
+    if stopped:
+        print("\n[WFO] Stopped early by user.")
 
 
 def parse_args() -> argparse.Namespace:

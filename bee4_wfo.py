@@ -6,6 +6,7 @@ Walk-forward optimization for the first bee4 WaveTrend strategy.
 
 from __future__ import annotations
 
+from itertools import product
 from typing import Optional
 
 import numpy as np
@@ -55,13 +56,15 @@ def walk_forward_optimization(
     score_mode: str = "balanced",
     verbose: bool = True,
     on_window_done=None,
+    on_combo_progress=None,
+    should_stop=None,
     fee_rate: float = FEE_RATE,
     opt_days: int = OPT_DAYS,
     live_days: int = LIVE_DAYS,
     initial_capital: float = INITIAL_CAPITAL,
     base_params: Optional[dict] = None,
     grid_overrides: Optional[dict] = None,
-) -> tuple[pd.DataFrame, Optional[pd.DataFrame], pd.DataFrame, float]:
+) -> tuple[pd.DataFrame, Optional[pd.DataFrame], pd.DataFrame, float, bool]:
     """Run WFO over precomputed WaveTrend indicator data."""
     opt_bars, live_bars = wfo_bars(interval, opt_days, live_days)
     opt_capital = float(initial_capital)
@@ -93,17 +96,34 @@ def walk_forward_optimization(
     all_live_trades: list[pd.DataFrame] = []
     global_equity: Optional[pd.DataFrame] = None
     window_stats: list[dict] = []
+    stopped = False
 
     total_windows = max(0, (n - opt_bars) // live_bars)
+    combo_total = max(
+        1,
+        len(channel_grid)
+        * len(avg_grid)
+        * len(signal_grid)
+        * len(min_level_grid)
+        * len(reentry_grid)
+        * len(ema_filter_grid)
+        * len(long_zone_grid)
+        * len(short_zone_grid),
+    )
+    combo_progress_step = max(1, combo_total // 20)
     if verbose:
         print(
             f"[WFO] candles={n} | windows~={total_windows} | "
             f"opt={opt_days}d ({opt_bars} bars) | live={live_days}d ({live_bars} bars) | "
-            f"score_mode={score_mode}"
+            f"score_mode={score_mode} | combos/window={combo_total}"
         )
         print("-" * 70)
 
     while start + opt_bars + live_bars <= n:
+        if should_stop is not None and should_stop():
+            stopped = True
+            break
+
         opt_slice = df.iloc[start : start + opt_bars]
         live_slice = df.iloc[start + opt_bars : start + opt_bars + live_bars]
 
@@ -112,37 +132,69 @@ def walk_forward_optimization(
         best_opt_trades = None
         best_opt_cap = opt_capital
 
-        for wt_channel_len in channel_grid:
-            for wt_avg_len in avg_grid:
-                for wt_signal_len in signal_grid:
-                    for wt_min_signal_level in min_level_grid:
-                        for wt_reentry_window_bars in reentry_grid:
-                            for wt_use_ema_filter in ema_filter_grid:
-                                for wt_long_entry_max_above_zero in long_zone_grid:
-                                    for wt_short_entry_min_below_zero in short_zone_grid:
-                                        params = dict(base_params)
-                                        params.update(
-                                            {
-                                                "wt_channel_len": wt_channel_len,
-                                                "wt_avg_len": wt_avg_len,
-                                                "wt_signal_len": wt_signal_len,
-                                                "wt_min_signal_level": wt_min_signal_level,
-                                                "wt_long_entry_window_bars": wt_reentry_window_bars,
-                                                "wt_short_entry_window_bars": wt_reentry_window_bars,
-                                                "wt_long_require_ema20_reclaim": bool(wt_use_ema_filter),
-                                                "wt_short_require_ema20_reject": bool(wt_use_ema_filter),
-                                                "wt_long_entry_max_above_zero": wt_long_entry_max_above_zero,
-                                                "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
-                                            }
-                                        )
-                                        strat = Bee4Strategy(params, fee_rate=fee_rate)
-                                        trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
-                                        score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
-                                        if score > best_score:
-                                            best_score = score
-                                            best_params = params
-                                            best_opt_trades = trades_opt
-                                            best_opt_cap = final_cap_opt
+        if on_combo_progress is not None:
+            on_combo_progress(window_id, total_windows, 0, combo_total)
+
+        combo_idx = 0
+        for (
+            wt_channel_len,
+            wt_avg_len,
+            wt_signal_len,
+            wt_min_signal_level,
+            wt_reentry_window_bars,
+            wt_use_ema_filter,
+            wt_long_entry_max_above_zero,
+            wt_short_entry_min_below_zero,
+        ) in product(
+            channel_grid,
+            avg_grid,
+            signal_grid,
+            min_level_grid,
+            reentry_grid,
+            ema_filter_grid,
+            long_zone_grid,
+            short_zone_grid,
+        ):
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
+
+            combo_idx += 1
+            if on_combo_progress is not None and (
+                combo_idx == 1
+                or combo_idx % combo_progress_step == 0
+                or combo_idx == combo_total
+            ):
+                on_combo_progress(window_id, total_windows, combo_idx, combo_total)
+
+            params = dict(base_params)
+            params.update(
+                {
+                    "wt_channel_len": wt_channel_len,
+                    "wt_avg_len": wt_avg_len,
+                    "wt_signal_len": wt_signal_len,
+                    "wt_min_signal_level": wt_min_signal_level,
+                    "wt_long_entry_window_bars": wt_reentry_window_bars,
+                    "wt_short_entry_window_bars": wt_reentry_window_bars,
+                    "wt_long_require_ema20_reclaim": bool(wt_use_ema_filter),
+                    "wt_short_require_ema20_reject": bool(wt_use_ema_filter),
+                    "wt_long_entry_max_above_zero": wt_long_entry_max_above_zero,
+                    "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
+                }
+            )
+            strat = Bee4Strategy(params, fee_rate=fee_rate)
+            trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
+            score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
+            if score > best_score:
+                best_score = score
+                best_params = params
+                best_opt_trades = trades_opt
+                best_opt_cap = final_cap_opt
+
+        if stopped:
+            if verbose:
+                print(f"[WFO] Stop requested during window {window_id + 1}/{total_windows}.")
+            break
 
         if best_params is None:
             if verbose:
@@ -242,7 +294,7 @@ def walk_forward_optimization(
 
     all_trades_df = pd.concat(all_live_trades, ignore_index=True) if all_live_trades else pd.DataFrame()
     windows_df = pd.DataFrame(window_stats)
-    return all_trades_df, global_equity, windows_df, current_capital
+    return all_trades_df, global_equity, windows_df, current_capital, stopped
 
 
 def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
