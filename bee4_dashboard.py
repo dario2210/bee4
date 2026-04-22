@@ -1070,6 +1070,7 @@ def main_panel():
         dcc.Store(id="store-chart-filter",   data="all"),
         dcc.Store(id="store-chart-payload",  data=None),
         dcc.Store(id="store-server-token",   data=None, storage_type="session"),
+        dcc.Download(id="download-trades"),
         html.Div(id="chart-render-signal", style={"display":"none"}),
         dcc.Interval(id="poll",interval=15000,n_intervals=0),
         dcc.Location(id="_url", refresh=True),
@@ -1406,6 +1407,33 @@ def on_trade_select(active_cell, viewport_data, result_data):
         return dash.no_update, dash.no_update
     return _serialize_trade_record(selected.iloc[0]), "chart"
 
+
+@app.callback(
+    Output("download-trades", "data"),
+    Input("btn-export-trades", "n_clicks"),
+    State("store-result", "data"),
+    prevent_initial_call=True,
+)
+def export_trades(n_clicks, result_data):
+    if not n_clicks or not result_data:
+        return dash.no_update
+
+    trades_df = _normalize_chart_trades(pd.DataFrame(result_data.get("trades", [])))
+    if trades_df.empty:
+        return dash.no_update
+
+    export_df = trades_df.copy()
+    for col in ("entry_time", "exit_time"):
+        if col in export_df.columns:
+            export_df[col] = pd.to_datetime(export_df[col], utc=True, errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S%z")
+
+    mode = str(result_data.get("mode", "run")).lower()
+    symbol = str(result_data.get("symbol", "asset")).upper()
+    tf = str(result_data.get("tf", "tf")).lower()
+    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"bee4_{mode}_{symbol}_{tf}_trades_{stamp}.csv"
+    return dcc.send_data_frame(export_df.to_csv, filename, index=False, encoding="utf-8-sig")
+
 # ─── Callback: uruchom / stop ─────────────────────────────────────────────────
 @app.callback(
     Output("btn-run","disabled"),
@@ -1648,9 +1676,34 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                 return dash.no_update, metrics, html.Div("Brak transakcji", style={"color": C["muted"]})
 
             disp = _trade_table_frame(trades_df)
+            mode_label = "WFO live windows" if str(r.get("mode", "")).lower() == "wfo" else "Backtest"
 
             return dash.no_update, metrics, html.Div([
-                html.Div(f"{len(disp)} transakcji", style={"fontSize": "12px", "color": C["muted"], "marginBottom": "8px"}),
+                html.Div([
+                    html.Div([
+                        html.Div(f"{len(disp)} transakcji", style={"fontSize": "12px", "color": C["muted"]}),
+                        html.Div(
+                            f"Źródło: {mode_label}. Numer # jest lokalny dla bieżącego wyniku i resetuje się od 1 przy nowym uruchomieniu.",
+                            style={"fontSize": "11px", "color": C["muted"], "marginTop": "4px"},
+                        ),
+                    ]),
+                    html.Button(
+                        "Eksport CSV",
+                        id="btn-export-trades",
+                        n_clicks=0,
+                        style={
+                            "background": C["surf2"],
+                            "color": C["text"],
+                            "border": f"1px solid {C['border']}",
+                            "borderRadius": "12px",
+                            "padding": "10px 14px",
+                            "fontSize": "12px",
+                            "fontWeight": "600",
+                            "cursor": "pointer",
+                            "whiteSpace": "nowrap",
+                        },
+                    ),
+                ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "gap": "16px", "marginBottom": "10px"}),
                 dash_table.DataTable(
                     id="trades-table",
                     data=disp.to_dict("records"),
