@@ -130,10 +130,22 @@ p {
   color: var(--bee-amber) !important;
 }
 
+.wt-drp,
+.wt-drp > div,
 .wt-drp .Select-control,
+.wt-drp .Select-control *,
+.wt-drp [class*="control"],
+.wt-drp [class*="control"] *,
+.wt-drp [class*="singleValue"],
+.wt-drp [class*="singleValue"] *,
+.wt-drp [class*="valueContainer"],
+.wt-drp [class*="valueContainer"] *,
+.wt-drp input,
 .wt-drp .Select-menu-outer,
 .wt-drp .Select-menu {
-  color: #111111;
+  color: #111111 !important;
+  -webkit-text-fill-color: #111111 !important;
+  opacity: 1 !important;
 }
 
 .wt-drp .Select-placeholder,
@@ -160,6 +172,19 @@ p {
 .wt-drp .is-focused:not(.is-open) > .Select-control,
 .wt-drp .is-open > .Select-control {
   color: #111111 !important;
+}
+
+.wt-drp .Select-menu-outer,
+.wt-drp .Select-menu-outer *,
+.wt-drp .Select-menu,
+.wt-drp .Select-menu *,
+.wt-drp .Select-option,
+.wt-drp .VirtualizedSelectOption,
+.wt-drp [class*="menu"],
+.wt-drp [class*="menu"] *,
+.wt-drp [class*="option"] {
+  color: var(--bee-text) !important;
+  -webkit-text-fill-color: var(--bee-text) !important;
 }
 
 @media (max-width: 1180px) {

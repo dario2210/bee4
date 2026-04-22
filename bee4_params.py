@@ -40,7 +40,7 @@ WT_SHORT_EXIT_MAX_LEVEL = 0.0
 WT_SHORT_REQUIRE_EMA20_REJECT = True
 
 # Fees and execution friction
-FEE_RATE = 0.0007
+FEE_RATE = 0.00035
 
 # WFO windows
 OPT_DAYS = 120

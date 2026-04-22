@@ -77,7 +77,8 @@ def inp(id_, val, **kw):
 
 def drp(id_, opts, val):
     return dcc.Dropdown(id=id_, options=opts, value=val, clearable=False,
-                        className="wt-drp")
+                        className="wt-drp",
+                        style={"color":"#0b1220"})
 
 card_s = {
     "background": C["surface"],
@@ -1384,6 +1385,21 @@ pre, code, .dash-spreadsheet-container {
 ::-webkit-scrollbar-thumb{background:""" + C["border"] + """;border-radius:3px}
 
 /* ── Dropdown ── */
+.wt-drp,
+.wt-drp > div,
+.wt-drp .Select-control,
+.wt-drp .Select-control *,
+.wt-drp [class*="control"],
+.wt-drp [class*="control"] *,
+.wt-drp [class*="singleValue"],
+.wt-drp [class*="singleValue"] *,
+.wt-drp [class*="valueContainer"],
+.wt-drp [class*="valueContainer"] *,
+.wt-drp input {
+    color:#0b1220 !important;
+    -webkit-text-fill-color:#0b1220 !important;
+    opacity:1 !important;
+}
 .wt-drp .Select-control {
     background: #f5f7fb !important;
     border: 1px solid """ + C["border"] + """ !important;
@@ -1402,6 +1418,18 @@ pre, code, .dash-spreadsheet-container {
     background: #142336 !important;
     border: 1px solid """ + C["border"] + """ !important;
     z-index: 9999 !important;
+}
+.wt-drp .Select-menu-outer,
+.wt-drp .Select-menu-outer *,
+.wt-drp .Select-menu,
+.wt-drp .Select-menu *,
+.wt-drp [class*="menu"],
+.wt-drp [class*="menu"] *,
+.wt-drp .Select-option,
+.wt-drp .VirtualizedSelectOption,
+.wt-drp [class*="option"] {
+    color: """ + C["text"] + """ !important;
+    -webkit-text-fill-color: """ + C["text"] + """ !important;
 }
 .wt-drp .Select-option {
     background: #142336 !important;
