@@ -8,7 +8,7 @@ Dashboard, wykres, flow backtest/WFO/live oraz uklad plikow pozostaja spojne z w
 - domyslnie pracuje w trybie `long/short` z lustrzana logika po obu stronach rynku
 - otwiera `long` na zielonej kropce WaveTrend pod zerem oraz w oknie kilku barow po tym sygnale
 - otwiera `short` na czerwonej kropce WaveTrend nad zerem oraz w analogicznym oknie kilku barow po tym sygnale
-- dla `long` wymaga odzyskania `EMA20`, a dla `short` odrzucenia `EMA20`, zeby odsiac slabsze setupy
+- dla `long` wymaga odzyskania wybranej EMA, a dla `short` odrzucenia wybranej EMA, zeby odsiac slabsze setupy
 - dopuszcza re-entry, gdy WaveTrend nadal utrzymuje sie blisko zera po ostatniej zielonej lub czerwonej kropce
 - pozycja zamyka sie i odwraca dopiero na przeciwnym sygnale, zgodnie z profilem WaveTrend
 - wspiera backtest, walk-forward optimization oraz live/paper runner
@@ -25,6 +25,7 @@ W aktualnej wersji WFO testowane sa:
 - `wt_min_signal_level`
 - `wt_long_entry_window_bars` / `wt_short_entry_window_bars`
 - `wt_long_require_ema20_reclaim` / `wt_short_require_ema20_reject`
+- `wt_ema_filter_len`
 - `wt_long_entry_max_above_zero`
 - `wt_short_entry_min_below_zero`
 
@@ -34,10 +35,20 @@ Domyslna siatka WFO:
 - `avg_len`: `14, 21, 28`
 - `signal_len`: `3, 4`
 - `min_signal_level`: `0, 10`
-- `re-entry window`: `1, 2, 3`
-- `EMA20 filter`: `off, on`
-- `long zone max`: `0, 5, 10`
-- `short zone min`: `-10, -5, 0`
+- `re-entry window`: `1, 2`
+- `EMA filter`: `off, on`
+- `EMA length`: domyslnie `10, 20`; w dashboardzie mozna zaznaczyc tez `8, 15`
+- `long zone max`: domyslnie `-10, -20`; w dashboardzie mozna zaznaczyc tez `-30, -40`
+- `short zone min`: domyslnie `10, 20`; w dashboardzie mozna zaznaczyc tez `30, 40`
+
+Dashboard pokazuje dodatkowe wskazniki jakosci strategii:
+
+- `Return / Drawdown`
+- `Sharpe Ratio`
+- `Sortino Ratio`
+- `Risk/Reward Ratio`
+- `Expectancy`
+- `Consistency / Stability`
 
 Dashboard ma teraz dwa osobne tryby:
 

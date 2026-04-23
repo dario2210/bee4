@@ -38,6 +38,7 @@ WT_SHORT_ENTRY_WINDOW_BARS = 3
 WT_SHORT_ENTRY_MIN_BELOW_ZERO = 0.0
 WT_SHORT_EXIT_MAX_LEVEL = 0.0
 WT_SHORT_REQUIRE_EMA20_REJECT = True
+WT_EMA_FILTER_LEN = 20
 
 # Fees and execution friction
 FEE_RATE = 0.00035
@@ -53,14 +54,18 @@ WT_SIGNAL_LEN_GRID = [3, 4]
 WT_MIN_SIGNAL_LEVEL_GRID = [0.0, 10.0]
 WT_REENTRY_WINDOW_GRID = [1, 2]
 WT_USE_EMA_FILTER_GRID = [False, True]
-WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID = [0.0, 5.0]
-WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID = [-5.0, 0.0]
+WT_EMA_FILTER_LEN_GRID = [10, 20]
+WT_EMA_FILTER_LEN_OPTIONS = [8, 10, 15, 20]
+WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID = [-10.0, -20.0]
+WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS = [-10.0, -20.0, -30.0, -40.0]
+WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID = [10.0, 20.0]
+WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS = [10.0, 20.0, 30.0, 40.0]
 
 # Compatibility aliases kept so the bee1 dashboard structure can stay intact
 TP_GRID = WT_CHANNEL_LEN_GRID
 SL_GRID = WT_AVG_LEN_GRID
 TRAIL_DROP_GRID = WT_SIGNAL_LEN_GRID
-EMA_LEN_GRID = WT_MIN_SIGNAL_LEVEL_GRID
+EMA_LEN_GRID = WT_EMA_FILTER_LEN_GRID
 
 # Visual guide bands for the dashboard signal panel
 TMA_LOW_MIN = -60.0
@@ -84,6 +89,7 @@ DEFAULT_PARAMS = {
     "wt_short_entry_min_below_zero": WT_SHORT_ENTRY_MIN_BELOW_ZERO,
     "wt_short_exit_max_level": WT_SHORT_EXIT_MAX_LEVEL,
     "wt_short_require_ema20_reject": WT_SHORT_REQUIRE_EMA20_REJECT,
+    "wt_ema_filter_len": WT_EMA_FILTER_LEN,
     "fee_rate": FEE_RATE,
     "slippage_bps": 2.0,
     "spread_bps": 1.0,

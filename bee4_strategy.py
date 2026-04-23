@@ -47,6 +47,8 @@ class TradeRecord:
     entry_zone: str = ""
     entry_signal_level: float = 0.0
     entry_cross_type: str = ""
+    entry_ema_filter: float = 0.0
+    entry_ema_filter_len: int = 20
     exit_wt1: float = 0.0
     exit_wt2: float = 0.0
     exit_delta: float = 0.0
@@ -118,6 +120,8 @@ class Bee4Strategy:
             entry_zone=em.get("entry_zone", ""),
             entry_signal_level=em.get("entry_signal_level", 0.0),
             entry_cross_type=em.get("cross_type", ""),
+            entry_ema_filter=em.get("entry_ema_filter", 0.0),
+            entry_ema_filter_len=em.get("entry_ema_filter_len", 20),
             exit_wt1=xm.get("exit_wt1", 0.0),
             exit_wt2=xm.get("exit_wt2", 0.0),
             exit_delta=xm.get("exit_delta", 0.0),
@@ -203,6 +207,8 @@ class Bee4Strategy:
             "entry_zone",
             "entry_signal_level",
             "entry_cross_type",
+            "entry_ema_filter",
+            "entry_ema_filter_len",
             "exit_wt1",
             "exit_wt2",
             "exit_delta",

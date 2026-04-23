@@ -18,8 +18,10 @@ from bee4_params import (
     BINANCE_SYMBOL, BINANCE_INTERVAL, BINANCE_MARKET, BINANCE_START_DATE,
     DEFAULT_PARAMS, save_params,
     WT_CHANNEL_LEN_GRID, WT_AVG_LEN_GRID, WT_SIGNAL_LEN_GRID, WT_MIN_SIGNAL_LEVEL_GRID,
-    WT_REENTRY_WINDOW_GRID, WT_USE_EMA_FILTER_GRID,
-    WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
+    WT_REENTRY_WINDOW_GRID, WT_USE_EMA_FILTER_GRID, WT_EMA_FILTER_LEN_GRID,
+    WT_EMA_FILTER_LEN_OPTIONS,
+    WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS,
+    WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
 )
 from bee4_data     import load_klines, prepare_indicators
 from bee4_strategy import Bee4Strategy
@@ -132,6 +134,7 @@ def _strategy_params_from_controls(
     min_level,
     reentry_window,
     ema_filter,
+    ema_filter_len,
     long_zone,
     short_zone,
     fee_rate: float,
@@ -147,6 +150,11 @@ def _strategy_params_from_controls(
         if reentry_window not in (None, "")
         else DEFAULT_PARAMS["wt_long_entry_window_bars"]
     )
+    ema_filter_len = int(
+        ema_filter_len
+        if ema_filter_len not in (None, "")
+        else DEFAULT_PARAMS["wt_ema_filter_len"]
+    )
     params.update(
         {
             "wt_channel_len": int(channel_len if channel_len not in (None, "") else DEFAULT_PARAMS["wt_channel_len"]),
@@ -159,6 +167,7 @@ def _strategy_params_from_controls(
             "wt_short_entry_window_bars": reentry_window,
             "wt_long_require_ema20_reclaim": use_ema_filter,
             "wt_short_require_ema20_reject": use_ema_filter,
+            "wt_ema_filter_len": ema_filter_len,
             "wt_long_entry_max_above_zero": float(
                 long_zone if long_zone not in (None, "") else DEFAULT_PARAMS["wt_long_entry_max_above_zero"]
             ),
@@ -179,6 +188,7 @@ def _grid_overrides_from_controls(
     min_level_grid,
     reentry_grid,
     ema_filter_grid,
+    ema_len_grid,
     long_zone_grid,
     short_zone_grid,
 ) -> dict:
@@ -189,6 +199,7 @@ def _grid_overrides_from_controls(
         "wt_min_signal_level": _clean_selected_values(min_level_grid, WT_MIN_SIGNAL_LEVEL_GRID, float),
         "wt_reentry_window_bars": _clean_selected_values(reentry_grid, WT_REENTRY_WINDOW_GRID, int),
         "wt_use_ema_filter": _clean_selected_values(ema_filter_grid, WT_USE_EMA_FILTER_GRID, bool),
+        "wt_ema_filter_len": _clean_selected_values(ema_len_grid, WT_EMA_FILTER_LEN_GRID, int),
         "wt_long_entry_max_above_zero": _clean_selected_values(
             long_zone_grid,
             WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
@@ -216,6 +227,7 @@ PARAM_SUMMARY_ORDER = [
     "wt_min_signal_level",
     "wt_long_entry_window_bars",
     "wt_long_require_ema20_reclaim",
+    "wt_ema_filter_len",
     "wt_long_entry_max_above_zero",
     "wt_short_entry_min_below_zero",
     "allow_shorts",
@@ -229,7 +241,8 @@ PARAM_SUMMARY_LABELS = {
     "wt_signal_len": "Signal",
     "wt_min_signal_level": "Min level",
     "wt_long_entry_window_bars": "Re-entry window",
-    "wt_long_require_ema20_reclaim": "EMA20 filter",
+    "wt_long_require_ema20_reclaim": "EMA filter",
+    "wt_ema_filter_len": "EMA length",
     "wt_long_entry_max_above_zero": "Long zone max",
     "wt_short_entry_min_below_zero": "Short zone min",
     "allow_shorts": "Shorts enabled",
@@ -312,14 +325,14 @@ def hero_banner() -> html.Div:
             html.H2("Bee4 WaveTrend console"),
             html.P(
                 "Bee4 zachowuje dashboard bee1, ale domyslnie pracuje jako "
-                "WaveTrend long/short z lustrzanym re-entry i filtrem EMA20 po obu stronach."
+                "WaveTrend long/short z lustrzanym re-entry i parametryzowanym filtrem EMA po obu stronach."
             ),
         ], className="hero-copy"),
         html.Div([
             html.Div("Note", className="hero-note-title"),
             html.P(
-                "Long pojawia sie na zielonej kropce pod zerem po odzyskaniu EMA20, "
-                "short na czerwonej kropce nad zerem po odrzuceniu EMA20, "
+                "Long pojawia sie na zielonej kropce w strefie ujemnej po odzyskaniu EMA, "
+                "short na czerwonej kropce w strefie dodatniej po odrzuceniu EMA, "
                 "a pozycja odwraca sie dopiero na przeciwnym sygnale."
             ),
         ], className="hero-note"),
@@ -369,13 +382,14 @@ def fig_pdist(wd):
         ("best_wt_signal_len", "Signal", C["amber"]),
         ("best_wt_min_signal_level", "Min level", C["purple"]),
         ("best_wt_reentry_window_bars", "Re-entry", C["coral"]),
-        ("best_wt_use_ema_filter", "EMA20", C["blue"]),
+        ("best_wt_use_ema_filter", "EMA on/off", C["blue"]),
+        ("best_wt_ema_filter_len", "EMA len", C["amber"]),
         ("best_wt_long_entry_max_above_zero", "Long zone", C["green"]),
         ("best_wt_short_entry_min_below_zero", "Short zone", C["red"]),
     ]
     fig = make_subplots(
-        rows=2,
-        cols=4,
+        rows=3,
+        cols=3,
         subplot_titles=[title for _, title, _ in specs],
         vertical_spacing=0.16,
         horizontal_spacing=0.08,
@@ -383,8 +397,8 @@ def fig_pdist(wd):
     for idx, (col, _title, clr) in enumerate(specs):
         if col not in wd.columns:
             continue
-        row = idx // 4 + 1
-        col_idx = idx % 4 + 1
+        row = idx // 3 + 1
+        col_idx = idx % 3 + 1
         vc = wd[col].value_counts().sort_index()
         labels = ["on" if v is True else "off" if v is False else str(v) for v in vc.index]
         fig.add_trace(
@@ -392,7 +406,7 @@ def fig_pdist(wd):
             row=row,
             col=col_idx,
         )
-    fig.update_layout(**PT, height=560)
+    fig.update_layout(**PT, height=640)
     return fig
 
 def fig_fee(fd):
@@ -495,6 +509,8 @@ def _trade_detail_panel(trade: dict | None) -> html.Div:
                  "WT2", fmt_float(trade.get("entry_wt2"), ".2f")),
             row2("Delta", fmt_float(trade.get("entry_delta"), ".2f"),
                  "Min level", fmt_float(trade.get("entry_signal_level"), ".2f")),
+            row2("EMA filter", fmt_float(trade.get("entry_ema_filter"), ".2f"),
+                 "EMA length", fmt_text(trade.get("entry_ema_filter_len", "n/d"))),
             row2("Strefa", fmt_text(trade.get("entry_zone")),
                  "Cross", fmt_text(trade.get("entry_cross_type"))),
             html.Div(style={"borderTop": f"1px solid {C['border']}", "margin": "8px 0"}),
@@ -558,7 +574,8 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
     numeric_cols = [
         "entry_price", "exit_price", "gross_ret", "fee_ret", "net_ret",
         "pnl", "fee_usd", "entry_wt1", "entry_wt2", "entry_delta",
-        "entry_signal_level", "exit_wt1", "exit_wt2", "exit_delta",
+        "entry_signal_level", "entry_ema_filter", "entry_ema_filter_len",
+        "exit_wt1", "exit_wt2", "exit_delta",
         "exit_signal_level",
     ]
     for col in numeric_cols:
@@ -679,6 +696,7 @@ def lightweight_chart_payload(
     windows_df: pd.DataFrame | None = None,
     selected_trade: dict | None = None,
     filter_mode: str = "all",
+    params: dict | None = None,
 ) -> dict[str, object]:
     source_df = _chart_source_df(symbol, tf)
     if source_df is None or source_df.empty:
@@ -722,7 +740,12 @@ def lightweight_chart_payload(
         for row in df.itertuples(index=False)
     ]
 
-    line_specs = []
+    params = params or {}
+    ema_filter_len = int(params.get("wt_ema_filter_len", DEFAULT_PARAMS["wt_ema_filter_len"]) or 20)
+    ema_col = f"ema_{ema_filter_len}"
+    line_specs = [
+        (ema_col, f"EMA filter {ema_filter_len}", C["purple"], 2.0, True),
+    ]
     lines = []
     for column, label, color, width, visible in line_specs:
         if column not in df.columns:
@@ -1209,10 +1232,14 @@ def sidebar():
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
-                html.Div([field("EMA20 filter", drp("inp-bt-ema-filter", [
+                html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
                     {"label": "Off", "value": False},
                     {"label": "On", "value": True},
                 ], DEFAULT_PARAMS["wt_long_require_ema20_reclaim"]))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"flex":"1"}),
+                html.Div(style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Long zone max", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
@@ -1267,7 +1294,7 @@ def sidebar():
                 value=WT_REENTRY_WINDOW_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka EMA20"),
+            sec("Siatka EMA on/off"),
             dcc.Checklist(id="chk-grid-ema-filter",
                 options=[
                     {"label":" Off","value":False},
@@ -1276,20 +1303,26 @@ def sidebar():
                 value=WT_USE_EMA_FILTER_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Siatka EMA length"),
+            dcc.Checklist(id="chk-grid-ema-len",
+                options=[{"label":f" {v}","value":v} for v in WT_EMA_FILTER_LEN_OPTIONS],
+                value=WT_EMA_FILTER_LEN_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Long zone max"),
             dcc.Checklist(id="chk-grid-long-zone",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID],
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS],
                 value=WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Short zone min"),
             dcc.Checklist(id="chk-grid-short-zone",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID],
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS],
                 value=WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "Siatki są zawężone do bardziej praktycznych zakresów, żeby WFO szybciej szukało ustawień re-entry, EMA20 i stref wejścia.",
+                "Domyślne siatki są zawężone, żeby WFO szybko startowało. Możesz ręcznie zaznaczyć pełne strefy -10..-40 oraz 10..40 i EMA 8/10/15/20.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -1525,6 +1558,7 @@ def _worker(
     bt_min_level,
     bt_reentry,
     bt_ema_filter,
+    bt_ema_len,
     bt_long_zone,
     bt_short_zone,
     grid_channel,
@@ -1533,6 +1567,7 @@ def _worker(
     grid_min_level,
     grid_reentry,
     grid_ema_filter,
+    grid_ema_len,
     grid_long_zone,
     grid_short_zone,
 ):
@@ -1588,6 +1623,7 @@ def _worker(
             bt_min_level,
             bt_reentry,
             bt_ema_filter,
+            bt_ema_len,
             bt_long_zone,
             bt_short_zone,
             fee_rate_val,
@@ -1638,6 +1674,7 @@ def _worker(
             grid_min_level,
             grid_reentry,
             grid_ema_filter,
+            grid_ema_len,
             grid_long_zone,
             grid_short_zone,
         )
@@ -1855,10 +1892,12 @@ def export_trades(n_clicks, result_data):
     State("inp-bt-channel","value"), State("inp-bt-avg","value"),
     State("inp-bt-signal","value"), State("inp-bt-min-level","value"),
     State("inp-bt-reentry","value"), State("inp-bt-ema-filter","value"),
+    State("inp-bt-ema-len","value"),
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
+    State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     prevent_initial_call=True,
 )
@@ -1866,9 +1905,9 @@ def on_run_stop(nr, ns,
     sym, tf, mkt, frm, to, cap,
     run_mode, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
-    bt_reentry, bt_ema_filter, bt_long_zone, bt_short_zone,
+    bt_reentry, bt_ema_filter, bt_ema_len, bt_long_zone, bt_short_zone,
     grid_channel, grid_avg, grid_signal, grid_min_level,
-    grid_reentry, grid_ema_filter, grid_long_zone, grid_short_zone):
+    grid_reentry, grid_ema_filter, grid_ema_len, grid_long_zone, grid_short_zone):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -1890,9 +1929,9 @@ def on_run_stop(nr, ns,
             run_mode or "wfo",
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
-            bt_reentry, bt_ema_filter, bt_long_zone, bt_short_zone,
+            bt_reentry, bt_ema_filter, bt_ema_len, bt_long_zone, bt_short_zone,
             grid_channel, grid_avg, grid_signal, grid_min_level,
-            grid_reentry, grid_ema_filter, grid_long_zone, grid_short_zone,
+            grid_reentry, grid_ema_filter, grid_ema_len, grid_long_zone, grid_short_zone,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj
@@ -1974,6 +2013,27 @@ def _result_metrics(result_data: dict | None) -> list:
     exp_v = stats.get("expectancy_usd", 0)
     n_tr = stats.get("n_trades", 0)
     fin_cap = stats.get("final_capital", capital)
+    rdd = stats.get("return_drawdown_ratio", float("nan"))
+    sharpe = stats.get("sharpe_ratio", float("nan"))
+    sortino = stats.get("sortino_ratio", float("nan"))
+    rr = stats.get("risk_reward_ratio", float("nan"))
+    consistency = stats.get("consistency_pct", float("nan"))
+    stability = stats.get("stability_score", float("nan"))
+
+    def metric_or_na(value, pattern="{:.2f}"):
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return "n/d"
+        return pattern.format(value)
+
+    def metric_color(value):
+        if value is None:
+            return C["text"]
+        try:
+            if np.isnan(value):
+                return C["text"]
+        except TypeError:
+            return C["text"]
+        return pc(value)
 
     return [
         mcrd("Net zwrot", f"{net_ret:+.2f}%", f"${net_pnl:+,.0f}", pc(net_ret)),
@@ -1987,6 +2047,10 @@ def _result_metrics(result_data: dict | None) -> list:
         mcrd("Max DD", f"{dd:.1f}%", None, C["red"]),
         mcrd("CAGR", f"{cagr:.1f}%", f"{symbol} {tf}", pc(cagr)),
         mcrd("Transakcji", str(n_tr), f"exp: ${exp_v:.1f}/tr"),
+        mcrd("Return/DD", metric_or_na(rdd), "net return / max DD", metric_color(rdd)),
+        mcrd("Sharpe", metric_or_na(sharpe), f"Sortino: {metric_or_na(sortino)}"),
+        mcrd("R:R avg", metric_or_na(rr), "avg win / avg loss"),
+        mcrd("Consistency", metric_or_na(consistency, "{:.0f}%"), f"stability: {metric_or_na(stability)}"),
     ]
 
 
@@ -2036,7 +2100,7 @@ def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) 
             ], className="panel-head"),
             html.Div(id="tv-chart", className="tv-chart"),
             html.Div(
-                "Górny panel pokazuje cenę i markery trade'ów, a dolny przebiegi WT1 i WT2 "
+                "Górny panel pokazuje cenę, linię EMA filtra i markery trade'ów, a dolny przebiegi WT1 i WT2 "
                 "z poziomem zera oraz strefami sygnałowymi.",
                 className="chart-caption",
             ),
@@ -2085,6 +2149,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                 windows_df=windows_df,
                 selected_trade=selected_trade_val,
                 filter_mode=chart_filter_val or "all",
+                params=r.get("best_params") or r.get("params_used") or DEFAULT_PARAMS,
             )
             return chart_payload, metrics, _build_chart_tab(selected_trade_val, chart_filter_val)
 
@@ -2257,7 +2322,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
             return dash.no_update, metrics, html.Div([
                 dcc.Graph(
                     figure=fig_pdist(windows_df),
-                    style={"height": "380px"},
+                    style={"height": "640px"},
                     config={"displayModeBar": False},
                 ),
                 _params_summary_card(
@@ -2304,6 +2369,12 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
             ext = []
             for key, label in [
                 ("expectancy_usd", "Expectancy/trade USD"),
+                ("return_drawdown_ratio", "Return/DD"),
+                ("sharpe_ratio", "Sharpe"),
+                ("sortino_ratio", "Sortino"),
+                ("risk_reward_ratio", "R:R avg"),
+                ("consistency_pct", "Consistency %"),
+                ("stability_score", "Stability"),
                 ("avg_winner_usd", "Śr. winner USD"),
                 ("avg_loser_usd", "Śr. loser USD"),
                 ("median_ret_pct", "Median ret %"),
@@ -2401,6 +2472,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                 windows_df=windows_df,
                 selected_trade=sel_trade,
                 filter_mode=chart_filt,
+                params=r.get("best_params") or r.get("params_used") or DEFAULT_PARAMS,
             )
             _filter_opts = [
                 {"label":"Wszystkie","value":"all"},
@@ -2439,7 +2511,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                     ], className="panel-head"),
                     html.Div(id="tv-chart", className="tv-chart"),
                     html.Div(
-                        "Cena, markery transakcji oraz panel WaveTrend sa renderowane przez "
+                        "Cena, linia EMA filtra, markery transakcji oraz panel WaveTrend sa renderowane przez "
                         "ten sam otwarty silnik Lightweight Charts od TradingView.",
                         className="chart-caption",
                     ),
@@ -2552,7 +2624,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
 
         elif tab == "wfo-par":
             content = html.Div(
-                dcc.Graph(figure=fig_pdist(windows_df),style={"height":"380px"},
+                dcc.Graph(figure=fig_pdist(windows_df),style={"height":"640px"},
                           config={"displayModeBar":False})
                 if not windows_df.empty
                 else html.Div("Uruchom tryb WFO.",style={"color":C["muted"]})

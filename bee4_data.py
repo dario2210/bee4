@@ -16,6 +16,8 @@ from bee4_params import (
     WT_CHANNEL_LEN_GRID,
     WT_AVG_LEN_GRID,
     WT_SIGNAL_LEN_GRID,
+    WT_EMA_FILTER_LEN,
+    WT_EMA_FILTER_LEN_OPTIONS,
 )
 
 
@@ -72,7 +74,7 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
       - hlc3
       - wt1_cX_aY
       - wt2_cX_aY_sZ
-      - ema20
+      - ema_X filter columns
       - wt1, wt2, wt_delta
       - wt_green_dot, wt_red_dot
       - bars_since_wt_green_dot, bars_since_wt_red_dot
@@ -99,7 +101,10 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
                 df[wt2_column(channel_len, avg_len, signal_len)] = wt1.rolling(int(signal_len)).mean()
 
     default_wt1_col, default_wt2_col = wt_columns(WT_CHANNEL_LEN, WT_AVG_LEN, WT_SIGNAL_LEN)
-    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    ema_lens = sorted(set([WT_EMA_FILTER_LEN] + list(WT_EMA_FILTER_LEN_OPTIONS)))
+    for ema_len in ema_lens:
+        df[f"ema_{int(ema_len)}"] = df["close"].ewm(span=int(ema_len), adjust=False).mean()
+    df["ema20"] = df["ema_20"]
     df["wt1"] = df[default_wt1_col]
     df["wt2"] = df[default_wt2_col]
     df["wt_delta"] = df["wt1"] - df["wt2"]

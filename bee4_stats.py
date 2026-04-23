@@ -125,6 +125,52 @@ def compute_stats(
     cagr = ((final_capital / initial_capital) ** (1.0 / (days / 365.0)) - 1.0) * 100.0 \
            if days > 0 else float("nan")
 
+    return_drawdown_ratio = (
+        net_return_pct / abs(max_dd)
+        if max_dd < 0
+        else float("nan")
+    )
+
+    trade_returns = (
+        pd.to_numeric(trades["net_ret"], errors="coerce").dropna()
+        if "net_ret" in trades.columns
+        else pd.Series(dtype="float64")
+    )
+    if len(trade_returns) > 1:
+        ret_std = trade_returns.std(ddof=1)
+        sharpe_ratio = trade_returns.mean() / ret_std * np.sqrt(len(trade_returns)) if ret_std > 0 else float("nan")
+        downside = trade_returns[trade_returns < 0]
+        down_std = downside.std(ddof=1) if len(downside) > 1 else float("nan")
+        sortino_ratio = trade_returns.mean() / down_std * np.sqrt(len(trade_returns)) if down_std and down_std > 0 else float("nan")
+    else:
+        sharpe_ratio = float("nan")
+        sortino_ratio = float("nan")
+
+    risk_reward_ratio = avg_win / abs(avg_loss) if avg_loss < 0 else float("nan")
+
+    consistency_pct = float("nan")
+    stability_score = float("nan")
+    period_return_std_pct = float("nan")
+    worst_period_return_pct = float("nan")
+    if "exit_time" in trades.columns and "pnl" in trades.columns:
+        period_df = trades.copy()
+        period_df["exit_time"] = pd.to_datetime(period_df["exit_time"], utc=True, errors="coerce")
+        period_df = period_df.dropna(subset=["exit_time"])
+        if not period_df.empty:
+            monthly_pnl = (
+                period_df.set_index("exit_time")["pnl"]
+                .resample("ME")
+                .sum()
+            )
+            monthly_ret = monthly_pnl / initial_capital * 100.0
+            monthly_ret = monthly_ret[monthly_ret != 0]
+            if len(monthly_ret) > 0:
+                consistency_pct = (monthly_ret > 0).mean() * 100.0
+                worst_period_return_pct = monthly_ret.min()
+            if len(monthly_ret) > 1:
+                period_return_std_pct = monthly_ret.std(ddof=1)
+                stability_score = monthly_ret.mean() / period_return_std_pct if period_return_std_pct > 0 else float("nan")
+
     stats = {
         "label"              : label,
         "n_trades"           : n_trades,
@@ -143,6 +189,14 @@ def compute_stats(
         "avg_winner_usd"     : avg_win,
         "avg_loser_usd"      : avg_loss,
         "expectancy_usd"     : expectancy,
+        "return_drawdown_ratio": return_drawdown_ratio,
+        "sharpe_ratio"       : sharpe_ratio,
+        "sortino_ratio"      : sortino_ratio,
+        "risk_reward_ratio"  : risk_reward_ratio,
+        "consistency_pct"    : consistency_pct,
+        "stability_score"    : stability_score,
+        "period_return_std_pct": period_return_std_pct,
+        "worst_period_return_pct": worst_period_return_pct,
         "median_ret_pct"     : median_ret,
         "longest_losing_streak": max_streak,
         "exposure_pct"       : exposure_pct,
@@ -193,6 +247,12 @@ def _print_stats(stats: dict, trades: pd.DataFrame) -> None:
     print(f"  Winrate:                 {_fmt(stats['winrate_pct'], pct=True)}")
     print(f"  Profit Factor:           {_fmt(stats['profit_factor'])}")
     print(f"  Expectancy / trade:      {_fmt(stats['expectancy_usd'])} USD")
+    print(f"  Return / Drawdown:       {_fmt(stats['return_drawdown_ratio'])}")
+    print(f"  Sharpe Ratio:            {_fmt(stats['sharpe_ratio'])}")
+    print(f"  Sortino Ratio:           {_fmt(stats['sortino_ratio'])}")
+    print(f"  Risk/Reward (avg):       {_fmt(stats['risk_reward_ratio'])}")
+    print(f"  Consistency:             {_fmt(stats['consistency_pct'], pct=True)}")
+    print(f"  Stability score:         {_fmt(stats['stability_score'])}")
     print(f"  Śr. winner:              {_fmt(stats['avg_winner_usd'])} USD")
     print(f"  Śr. loser:               {_fmt(stats['avg_loser_usd'])} USD")
     print(f"  Median zwrot / trade:    {_fmt(stats['median_ret_pct'], 3, pct=True)}")
@@ -233,7 +293,8 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_signal_len", "Signal"),
         ("best_wt_min_signal_level", "Min level"),
         ("best_wt_reentry_window_bars", "Re-entry"),
-        ("best_wt_use_ema_filter", "EMA20"),
+        ("best_wt_use_ema_filter", "EMA on"),
+        ("best_wt_ema_filter_len", "EMA len"),
         ("best_wt_long_entry_max_above_zero", "Long zone"),
         ("best_wt_short_entry_min_below_zero", "Short zone"),
     ]:
@@ -248,7 +309,8 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_signal_len", "Signal"),
         ("best_wt_min_signal_level", "Min level"),
         ("best_wt_reentry_window_bars", "Re-entry"),
-        ("best_wt_use_ema_filter", "EMA20"),
+        ("best_wt_use_ema_filter", "EMA on"),
+        ("best_wt_ema_filter_len", "EMA len"),
         ("best_wt_long_entry_max_above_zero", "Long zone"),
         ("best_wt_short_entry_min_below_zero", "Short zone"),
     ]:
@@ -267,6 +329,7 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         "best_wt_min_signal_level",
         "best_wt_reentry_window_bars",
         "best_wt_use_ema_filter",
+        "best_wt_ema_filter_len",
         "best_wt_long_entry_max_above_zero",
         "best_wt_short_entry_min_below_zero",
         "live_return_pct",

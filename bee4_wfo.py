@@ -23,6 +23,8 @@ from bee4_params import (
     WT_AVG_LEN_GRID,
     WT_CHANNEL_LEN,
     WT_CHANNEL_LEN_GRID,
+    WT_EMA_FILTER_LEN,
+    WT_EMA_FILTER_LEN_GRID,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
     WT_LONG_ENTRY_WINDOW_BARS,
@@ -77,6 +79,7 @@ def walk_forward_optimization(
     min_level_grid = _clean_grid(grid_overrides.get("wt_min_signal_level"), WT_MIN_SIGNAL_LEVEL_GRID, float)
     reentry_grid = _clean_grid(grid_overrides.get("wt_reentry_window_bars"), WT_REENTRY_WINDOW_GRID, int)
     ema_filter_grid = _clean_grid(grid_overrides.get("wt_use_ema_filter"), WT_USE_EMA_FILTER_GRID, bool)
+    ema_len_grid = _clean_grid(grid_overrides.get("wt_ema_filter_len"), WT_EMA_FILTER_LEN_GRID, int)
     long_zone_grid = _clean_grid(
         grid_overrides.get("wt_long_entry_max_above_zero"),
         WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
@@ -107,6 +110,7 @@ def walk_forward_optimization(
         * len(min_level_grid)
         * len(reentry_grid)
         * len(ema_filter_grid)
+        * len(ema_len_grid)
         * len(long_zone_grid)
         * len(short_zone_grid),
     )
@@ -143,6 +147,7 @@ def walk_forward_optimization(
             wt_min_signal_level,
             wt_reentry_window_bars,
             wt_use_ema_filter,
+            wt_ema_filter_len,
             wt_long_entry_max_above_zero,
             wt_short_entry_min_below_zero,
         ) in product(
@@ -152,6 +157,7 @@ def walk_forward_optimization(
             min_level_grid,
             reentry_grid,
             ema_filter_grid,
+            ema_len_grid,
             long_zone_grid,
             short_zone_grid,
         ):
@@ -178,6 +184,7 @@ def walk_forward_optimization(
                     "wt_short_entry_window_bars": wt_reentry_window_bars,
                     "wt_long_require_ema20_reclaim": bool(wt_use_ema_filter),
                     "wt_short_require_ema20_reject": bool(wt_use_ema_filter),
+                    "wt_ema_filter_len": int(wt_ema_filter_len),
                     "wt_long_entry_max_above_zero": wt_long_entry_max_above_zero,
                     "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
                 }
@@ -226,6 +233,7 @@ def walk_forward_optimization(
             trades_live["wt_min_signal_level"] = best_params["wt_min_signal_level"]
             trades_live["wt_reentry_window_bars"] = best_params["wt_long_entry_window_bars"]
             trades_live["wt_use_ema_filter"] = best_params["wt_long_require_ema20_reclaim"]
+            trades_live["wt_ema_filter_len"] = best_params["wt_ema_filter_len"]
             trades_live["wt_long_entry_max_above_zero"] = best_params["wt_long_entry_max_above_zero"]
             trades_live["wt_short_entry_min_below_zero"] = best_params["wt_short_entry_min_below_zero"]
             all_live_trades.append(trades_live)
@@ -251,6 +259,7 @@ def walk_forward_optimization(
                 "best_wt_min_signal_level": best_params["wt_min_signal_level"],
                 "best_wt_reentry_window_bars": best_params["wt_long_entry_window_bars"],
                 "best_wt_use_ema_filter": best_params["wt_long_require_ema20_reclaim"],
+                "best_wt_ema_filter_len": best_params["wt_ema_filter_len"],
                 "best_wt_long_entry_max_above_zero": best_params["wt_long_entry_max_above_zero"],
                 "best_wt_short_entry_min_below_zero": best_params["wt_short_entry_min_below_zero"],
                 "opt_score": best_score,
@@ -274,6 +283,7 @@ def walk_forward_optimization(
                 f"sig={best_params['wt_signal_len']} minlvl={best_params['wt_min_signal_level']:.1f} "
                 f"re={best_params['wt_long_entry_window_bars']} "
                 f"ema={'on' if best_params['wt_long_require_ema20_reclaim'] else 'off'} "
+                f"emalen={best_params['wt_ema_filter_len']} "
                 f"lz={best_params['wt_long_entry_max_above_zero']:.1f} "
                 f"sz={best_params['wt_short_entry_min_below_zero']:.1f}"
             )
@@ -329,6 +339,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_use_ema_filter" in recent.columns
         else WT_LONG_REQUIRE_EMA20_RECLAIM
     )
+    ema_filter_len = (
+        int(recent["best_wt_ema_filter_len"].mode().iloc[0])
+        if "best_wt_ema_filter_len" in recent.columns
+        else WT_EMA_FILTER_LEN
+    )
     long_entry_max_above_zero = (
         float(recent["best_wt_long_entry_max_above_zero"].mode().iloc[0])
         if "best_wt_long_entry_max_above_zero" in recent.columns
@@ -349,6 +364,7 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_short_entry_window_bars": reentry_window,
         "wt_long_require_ema20_reclaim": use_ema_filter,
         "wt_short_require_ema20_reject": use_ema_filter,
+        "wt_ema_filter_len": ema_filter_len,
         "wt_long_entry_max_above_zero": long_entry_max_above_zero,
         "wt_short_entry_min_below_zero": short_entry_min_below_zero,
     }

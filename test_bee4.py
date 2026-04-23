@@ -43,6 +43,7 @@ BASE_PARAMS = {
     "wt_short_entry_min_below_zero": 0.0,
     "wt_short_exit_max_level": 0.0,
     "wt_short_require_ema20_reject": True,
+    "wt_ema_filter_len": 20,
     "fee_rate": 0.0007,
     "slippage_bps": 0.0,
     "spread_bps": 0.0,
@@ -153,6 +154,10 @@ class TestWaveTrendPreparation:
         for col in [
             "hlc3",
             "ema20",
+            "ema_8",
+            "ema_10",
+            "ema_15",
+            "ema_20",
             "wt1",
             "wt2",
             "wt_delta",
@@ -226,6 +231,20 @@ class TestEntrySignals:
         prev = _make_bar(wt1=3.0, wt2=5.0)
         bar = _make_bar(wt1=8.0, wt2=6.0)
         sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+        assert sig.action == "none"
+
+    def test_restrictive_long_zone_blocks_shallow_cross(self):
+        params = dict(BASE_PARAMS, wt_long_entry_max_above_zero=-30.0)
+        prev = _make_bar(wt1=-35.0, wt2=-32.0)
+        bar = _make_bar(wt1=-24.0, wt2=-28.0)
+        sig = generate_entry_signal(bar, prev, params, None)
+        assert sig.action == "none"
+
+    def test_restrictive_short_zone_blocks_shallow_cross(self):
+        params = dict(BASE_PARAMS, wt_short_entry_min_below_zero=30.0)
+        prev = _make_bar(wt1=34.0, wt2=30.0, ema20=1900.0)
+        bar = _make_bar(wt1=22.0, wt2=27.0, ema20=1900.0)
+        sig = generate_entry_signal(bar, prev, params, None)
         assert sig.action == "none"
 
     def test_no_signal_when_already_in_position(self):
@@ -338,6 +357,24 @@ class TestDataLoading:
         finally:
             path.unlink(missing_ok=True)
 
+    def test_bar_from_row_uses_selected_ema_filter_length(self):
+        wt1_col, wt2_col = wt_columns(10, 21, 4)
+        row = pd.Series(
+            {
+                "time": pd.Timestamp("2024-01-01", tz="UTC"),
+                "close": 100.0,
+                wt1_col: -20.0,
+                wt2_col: -25.0,
+                "ema20": 90.0,
+                "ema_10": 95.0,
+            }
+        )
+
+        bar = bar_from_row(row, dict(BASE_PARAMS, wt_ema_filter_len=10))
+
+        assert bar.ema20 == pytest.approx(95.0)
+        assert bar.ema_filter_len == 10
+
     def test_load_klines_string(self):
         path = Path(".test_load_klines_string.csv")
         try:
@@ -391,6 +428,7 @@ class TestWFOHelpers:
                 "best_wt_min_signal_level": [0.0, 10.0, 10.0, 10.0, 20.0],
                 "best_wt_reentry_window_bars": [1, 2, 2, 2, 3],
                 "best_wt_use_ema_filter": [False, True, True, True, False],
+                "best_wt_ema_filter_len": [8, 10, 10, 10, 20],
                 "best_wt_long_entry_max_above_zero": [0.0, 5.0, 5.0, 5.0, 10.0],
                 "best_wt_short_entry_min_below_zero": [-10.0, -5.0, -5.0, -5.0, 0.0],
                 "n_trades_live": [1, 2, 2, 1, 0],
@@ -407,6 +445,7 @@ class TestWFOHelpers:
         assert best["wt_short_entry_window_bars"] == 2
         assert best["wt_long_require_ema20_reclaim"] is True
         assert best["wt_short_require_ema20_reject"] is True
+        assert best["wt_ema_filter_len"] == 10
         assert best["wt_long_entry_max_above_zero"] == pytest.approx(5.0)
         assert best["wt_short_entry_min_below_zero"] == pytest.approx(-5.0)
 
@@ -433,6 +472,7 @@ class TestWFOHelpers:
             "wt_min_signal_level": [0.0],
             "wt_reentry_window_bars": [2],
             "wt_use_ema_filter": [True],
+            "wt_ema_filter_len": [10],
             "wt_long_entry_max_above_zero": [5.0],
             "wt_short_entry_min_below_zero": [-5.0],
         }
@@ -457,6 +497,7 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_min_signal_level"]) == {0.0}
         assert set(windows_df["best_wt_reentry_window_bars"]) == {2}
         assert set(windows_df["best_wt_use_ema_filter"]) == {True}
+        assert set(windows_df["best_wt_ema_filter_len"]) == {10}
         assert set(windows_df["best_wt_long_entry_max_above_zero"]) == {5.0}
         assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {-5.0}
 

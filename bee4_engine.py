@@ -28,6 +28,7 @@ class BarData:
     wt2: float
     wt_delta: float
     ema20: float = np.nan
+    ema_filter_len: int = 20
     wt_green_dot: bool = False
     wt_red_dot: bool = False
     bars_since_wt_green_dot: float = np.nan
@@ -135,10 +136,10 @@ def generate_entry_signal(
 ) -> Signal:
     """
     Entry logic:
-      - long on bullish WaveTrend dot/cross when both lines are below zero
-      - short on bearish WaveTrend dot/cross when both lines are above zero
+      - long on bullish WaveTrend dot/cross when both lines are in the long zone
+      - short on bearish WaveTrend dot/cross when both lines are in the short zone
       - both sides may re-enter for a few bars after the dot if WaveTrend
-        stays near the zero line and the EMA20 filter still agrees
+        stays in the selected zone and the EMA filter still agrees
       - optional minimum distance from zero via wt_min_signal_level
     """
     if position is not None:
@@ -163,8 +164,8 @@ def generate_entry_signal(
 
     fresh_long_cross = (
         _cross_up(bar, prev_bar)
-        and bar.wt1 < zero_line
-        and bar.wt2 < zero_line
+        and bar.wt1 <= long_entry_max_above_zero
+        and bar.wt2 <= long_entry_max_above_zero
         and level_now >= min_level
         and long_ema_ok
     )
@@ -179,8 +180,8 @@ def generate_entry_signal(
     fresh_short_cross = (
         allow_shorts
         and _cross_down(bar, prev_bar)
-        and bar.wt1 > zero_line
-        and bar.wt2 > zero_line
+        and bar.wt1 >= short_entry_min_below_zero
+        and bar.wt2 >= short_entry_min_below_zero
         and level_now >= min_level
         and short_ema_ok
     )
@@ -204,7 +205,8 @@ def generate_entry_signal(
         "entry_signal_level": round(level_now, 4),
         "prev_wt1": round(prev_bar.wt1, 4),
         "prev_wt2": round(prev_bar.wt2, 4),
-        "entry_ema20": round(bar.ema20, 4) if not np.isnan(bar.ema20) else np.nan,
+        "entry_ema_filter": round(bar.ema20, 4) if not np.isnan(bar.ema20) else np.nan,
+        "entry_ema_filter_len": int(bar.ema_filter_len),
     }
 
     if long_cond:
@@ -348,6 +350,9 @@ def bar_from_row(row, params: dict) -> BarData:
     wt2 = float(wt2) if not np.isnan(wt2) else np.nan
     bars_since_wt_green_dot = row.get("bars_since_wt_green_dot", np.nan)
     bars_since_wt_red_dot = row.get("bars_since_wt_red_dot", np.nan)
+    ema_filter_len = int(params.get("wt_ema_filter_len", 20) or 20)
+    ema_col = f"ema_{ema_filter_len}"
+    ema_filter_value = row.get(ema_col, row.get("ema20", np.nan))
 
     return BarData(
         time=row["time"],
@@ -355,7 +360,8 @@ def bar_from_row(row, params: dict) -> BarData:
         wt1=wt1,
         wt2=wt2,
         wt_delta=float(wt1 - wt2) if not np.isnan(wt1) and not np.isnan(wt2) else np.nan,
-        ema20=_float_or_nan(row.get("ema20", np.nan)),
+        ema20=_float_or_nan(ema_filter_value),
+        ema_filter_len=ema_filter_len,
         wt_green_dot=_flag_value(row.get("wt_green_dot", False)),
         wt_red_dot=_flag_value(row.get("wt_red_dot", False)),
         bars_since_wt_green_dot=(
