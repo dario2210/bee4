@@ -27,18 +27,32 @@ BINANCE_CSV_CACHE = None
 WT_CHANNEL_LEN = 10
 WT_AVG_LEN = 21
 WT_SIGNAL_LEN = 4
-WT_MIN_SIGNAL_LEVEL = 0.0
+WT_MIN_SIGNAL_LEVEL = 30.0
 WT_ZERO_LINE = 0.0
+TRADE_DIRECTION = "both"
+ALLOW_LONGS = True
 ALLOW_SHORTS = True
 WT_LONG_ENTRY_WINDOW_BARS = 3
-WT_LONG_ENTRY_MAX_ABOVE_ZERO = 0.0
+WT_LONG_ENTRY_MAX_ABOVE_ZERO = -20.0
 WT_LONG_EXIT_MIN_LEVEL = 0.0
 WT_LONG_REQUIRE_EMA20_RECLAIM = True
+WT_LONG_REQUIRE_HTF_TREND = True
 WT_SHORT_ENTRY_WINDOW_BARS = 3
-WT_SHORT_ENTRY_MIN_BELOW_ZERO = 0.0
+WT_SHORT_ENTRY_MIN_BELOW_ZERO = 20.0
 WT_SHORT_EXIT_MAX_LEVEL = 0.0
 WT_SHORT_REQUIRE_EMA20_REJECT = True
+WT_SHORT_REQUIRE_HTF_TREND = True
 WT_EMA_FILTER_LEN = 20
+HTF_EMA_LEN = 200
+HTF_EMA_INTERVAL = "4h"
+ATR_LEN = 14
+ATR_STOP_ENABLED = True
+ATR_STOP_MULTIPLIER = 2.0
+BREAKEVEN_TRIGGER_ATR = 1.0
+TRAILING_TRIGGER_ATR = 2.0
+TRAILING_DISTANCE_ATR = 1.5
+WT_EXHAUSTION_EXIT_ENABLED = True
+WT_EXHAUSTION_MIN_LEVEL = 50.0
 
 # Fees and execution friction
 FEE_RATE = 0.00035
@@ -51,15 +65,17 @@ LIVE_DAYS = 14
 WT_CHANNEL_LEN_GRID = [10, 12]
 WT_AVG_LEN_GRID = [21, 28]
 WT_SIGNAL_LEN_GRID = [3, 4]
-WT_MIN_SIGNAL_LEVEL_GRID = [0.0, 10.0]
-WT_REENTRY_WINDOW_GRID = [1, 2]
+WT_MIN_SIGNAL_LEVEL_GRID = [20.0, 30.0, 40.0]
+WT_MIN_SIGNAL_LEVEL_OPTIONS = [20.0, 30.0, 40.0, 50.0, 60.0]
+WT_REENTRY_WINDOW_GRID = [0, 1, 2]
 WT_USE_EMA_FILTER_GRID = [False, True]
+WT_USE_HTF_TREND_FILTER_GRID = [False, True]
 WT_EMA_FILTER_LEN_GRID = [10, 20]
 WT_EMA_FILTER_LEN_OPTIONS = [8, 10, 15, 20]
-WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID = [-10.0, -20.0]
-WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS = [-10.0, -20.0, -30.0, -40.0]
-WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID = [10.0, 20.0]
-WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS = [10.0, 20.0, 30.0, 40.0]
+WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID = [-5.0, -20.0]
+WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS = [0.0, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
+WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID = [5.0, 20.0]
+WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS = [0.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0]
 
 # Compatibility aliases kept so the bee1 dashboard structure can stay intact
 TP_GRID = WT_CHANNEL_LEN_GRID
@@ -80,16 +96,30 @@ DEFAULT_PARAMS = {
     "wt_signal_len": WT_SIGNAL_LEN,
     "wt_min_signal_level": WT_MIN_SIGNAL_LEVEL,
     "wt_zero_line": WT_ZERO_LINE,
+    "trade_direction": TRADE_DIRECTION,
+    "allow_longs": ALLOW_LONGS,
     "allow_shorts": ALLOW_SHORTS,
     "wt_long_entry_window_bars": WT_LONG_ENTRY_WINDOW_BARS,
     "wt_long_entry_max_above_zero": WT_LONG_ENTRY_MAX_ABOVE_ZERO,
     "wt_long_exit_min_level": WT_LONG_EXIT_MIN_LEVEL,
     "wt_long_require_ema20_reclaim": WT_LONG_REQUIRE_EMA20_RECLAIM,
+    "wt_long_require_htf_trend": WT_LONG_REQUIRE_HTF_TREND,
     "wt_short_entry_window_bars": WT_SHORT_ENTRY_WINDOW_BARS,
     "wt_short_entry_min_below_zero": WT_SHORT_ENTRY_MIN_BELOW_ZERO,
     "wt_short_exit_max_level": WT_SHORT_EXIT_MAX_LEVEL,
     "wt_short_require_ema20_reject": WT_SHORT_REQUIRE_EMA20_REJECT,
+    "wt_short_require_htf_trend": WT_SHORT_REQUIRE_HTF_TREND,
     "wt_ema_filter_len": WT_EMA_FILTER_LEN,
+    "htf_ema_len": HTF_EMA_LEN,
+    "htf_ema_interval": HTF_EMA_INTERVAL,
+    "atr_len": ATR_LEN,
+    "atr_stop_enabled": ATR_STOP_ENABLED,
+    "atr_stop_multiplier": ATR_STOP_MULTIPLIER,
+    "breakeven_trigger_atr": BREAKEVEN_TRIGGER_ATR,
+    "trailing_trigger_atr": TRAILING_TRIGGER_ATR,
+    "trailing_distance_atr": TRAILING_DISTANCE_ATR,
+    "wt_exhaustion_exit_enabled": WT_EXHAUSTION_EXIT_ENABLED,
+    "wt_exhaustion_min_level": WT_EXHAUSTION_MIN_LEVEL,
     "fee_rate": FEE_RATE,
     "slippage_bps": 2.0,
     "spread_bps": 1.0,

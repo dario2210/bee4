@@ -294,6 +294,7 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_min_signal_level", "Min level"),
         ("best_wt_reentry_window_bars", "Re-entry"),
         ("best_wt_use_ema_filter", "EMA on"),
+        ("best_wt_use_htf_filter", "HTF on"),
         ("best_wt_ema_filter_len", "EMA len"),
         ("best_wt_long_entry_max_above_zero", "Long zone"),
         ("best_wt_short_entry_min_below_zero", "Short zone"),
@@ -310,6 +311,7 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_min_signal_level", "Min level"),
         ("best_wt_reentry_window_bars", "Re-entry"),
         ("best_wt_use_ema_filter", "EMA on"),
+        ("best_wt_use_htf_filter", "HTF on"),
         ("best_wt_ema_filter_len", "EMA len"),
         ("best_wt_long_entry_max_above_zero", "Long zone"),
         ("best_wt_short_entry_min_below_zero", "Short zone"),
@@ -329,6 +331,7 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         "best_wt_min_signal_level",
         "best_wt_reentry_window_bars",
         "best_wt_use_ema_filter",
+        "best_wt_use_htf_filter",
         "best_wt_ema_filter_len",
         "best_wt_long_entry_max_above_zero",
         "best_wt_short_entry_min_below_zero",
@@ -400,6 +403,20 @@ def breakdown_by_side(trades: pd.DataFrame) -> pd.DataFrame:
     }).reset_index()
 
 
+def breakdown_by_cross_type(trades: pd.DataFrame) -> pd.DataFrame:
+    """Fresh cross vs re-entry performance breakdown."""
+    if trades is None or trades.empty or "entry_cross_type" not in trades.columns:
+        return pd.DataFrame()
+    grp = trades.groupby("entry_cross_type")
+    return pd.DataFrame({
+        "n_trades": grp["pnl"].count(),
+        "win_rate": grp.apply(lambda g: (g["pnl"] > 0).mean() * 100),
+        "avg_pnl": grp["pnl"].mean(),
+        "total_pnl": grp["pnl"].sum(),
+        "avg_ret_pct": grp["net_ret"].mean() * 100 if "net_ret" in trades.columns else float("nan"),
+    }).reset_index()
+
+
 def breakdown_by_period(
     trades : pd.DataFrame,
     freq   : str = "YE",   # "YE"=rok, "QE"=kwartał, "ME"=miesiąc
@@ -433,6 +450,11 @@ def print_extended_report(
 
     print("\n── Breakdown Long / Short ──────────────────────────────────")
     print(breakdown_by_side(trades).to_string(index=False))
+
+    print("\n── Fresh cross vs Re-entry ─────────────────────────────────")
+    cross_df = breakdown_by_cross_type(trades)
+    if not cross_df.empty:
+        print(cross_df.to_string(index=False))
 
     print("\n── Breakdown roczny ────────────────────────────────────────")
     print(breakdown_by_period(trades, "YE").to_string(index=False))

@@ -18,7 +18,9 @@ from bee4_params import (
     BINANCE_SYMBOL, BINANCE_INTERVAL, BINANCE_MARKET, BINANCE_START_DATE,
     DEFAULT_PARAMS, save_params,
     WT_CHANNEL_LEN_GRID, WT_AVG_LEN_GRID, WT_SIGNAL_LEN_GRID, WT_MIN_SIGNAL_LEVEL_GRID,
+    WT_MIN_SIGNAL_LEVEL_OPTIONS,
     WT_REENTRY_WINDOW_GRID, WT_USE_EMA_FILTER_GRID, WT_EMA_FILTER_LEN_GRID,
+    WT_USE_HTF_TREND_FILTER_GRID,
     WT_EMA_FILTER_LEN_OPTIONS,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
@@ -28,7 +30,7 @@ from bee4_strategy import Bee4Strategy
 from bee4_wfo      import get_latest_best_params, walk_forward_optimization
 from bee4_stats    import (
     compute_stats, fee_summary_by_period,
-    breakdown_by_side, breakdown_by_period,
+    breakdown_by_side, breakdown_by_period, breakdown_by_cross_type,
 )
 from bee4_binance  import update_csv_cache, wfo_bars
 
@@ -127,13 +129,24 @@ def _clean_selected_values(values, fallback, caster):
     return cleaned
 
 
+def _direction_flags(direction) -> tuple[str, bool, bool]:
+    choice = str(direction or DEFAULT_PARAMS.get("trade_direction", "both")).strip().lower()
+    if choice == "long":
+        return "long", True, False
+    if choice == "short":
+        return "short", False, True
+    return "both", True, True
+
+
 def _strategy_params_from_controls(
+    direction,
     channel_len,
     avg_len,
     signal_len,
     min_level,
     reentry_window,
     ema_filter,
+    htf_filter,
     ema_filter_len,
     long_zone,
     short_zone,
@@ -141,9 +154,14 @@ def _strategy_params_from_controls(
     slippage_bps: float,
 ) -> dict:
     params = dict(DEFAULT_PARAMS)
+    trade_direction, allow_longs, allow_shorts = _direction_flags(direction)
     use_ema_filter = _parse_bool_value(
         ema_filter,
         DEFAULT_PARAMS["wt_long_require_ema20_reclaim"],
+    )
+    use_htf_filter = _parse_bool_value(
+        htf_filter,
+        DEFAULT_PARAMS["wt_long_require_htf_trend"],
     )
     reentry_window = int(
         reentry_window
@@ -157,6 +175,9 @@ def _strategy_params_from_controls(
     )
     params.update(
         {
+            "trade_direction": trade_direction,
+            "allow_longs": allow_longs,
+            "allow_shorts": allow_shorts,
             "wt_channel_len": int(channel_len if channel_len not in (None, "") else DEFAULT_PARAMS["wt_channel_len"]),
             "wt_avg_len": int(avg_len if avg_len not in (None, "") else DEFAULT_PARAMS["wt_avg_len"]),
             "wt_signal_len": int(signal_len if signal_len not in (None, "") else DEFAULT_PARAMS["wt_signal_len"]),
@@ -167,6 +188,8 @@ def _strategy_params_from_controls(
             "wt_short_entry_window_bars": reentry_window,
             "wt_long_require_ema20_reclaim": use_ema_filter,
             "wt_short_require_ema20_reject": use_ema_filter,
+            "wt_long_require_htf_trend": use_htf_filter,
+            "wt_short_require_htf_trend": use_htf_filter,
             "wt_ema_filter_len": ema_filter_len,
             "wt_long_entry_max_above_zero": float(
                 long_zone if long_zone not in (None, "") else DEFAULT_PARAMS["wt_long_entry_max_above_zero"]
@@ -188,6 +211,7 @@ def _grid_overrides_from_controls(
     min_level_grid,
     reentry_grid,
     ema_filter_grid,
+    htf_filter_grid,
     ema_len_grid,
     long_zone_grid,
     short_zone_grid,
@@ -199,6 +223,7 @@ def _grid_overrides_from_controls(
         "wt_min_signal_level": _clean_selected_values(min_level_grid, WT_MIN_SIGNAL_LEVEL_GRID, float),
         "wt_reentry_window_bars": _clean_selected_values(reentry_grid, WT_REENTRY_WINDOW_GRID, int),
         "wt_use_ema_filter": _clean_selected_values(ema_filter_grid, WT_USE_EMA_FILTER_GRID, bool),
+        "wt_use_htf_filter": _clean_selected_values(htf_filter_grid, WT_USE_HTF_TREND_FILTER_GRID, bool),
         "wt_ema_filter_len": _clean_selected_values(ema_len_grid, WT_EMA_FILTER_LEN_GRID, int),
         "wt_long_entry_max_above_zero": _clean_selected_values(
             long_zone_grid,
@@ -221,31 +246,47 @@ def _grid_combo_count(grid_overrides: dict) -> int:
 
 
 PARAM_SUMMARY_ORDER = [
+    "trade_direction",
     "wt_channel_len",
     "wt_avg_len",
     "wt_signal_len",
     "wt_min_signal_level",
     "wt_long_entry_window_bars",
     "wt_long_require_ema20_reclaim",
+    "wt_long_require_htf_trend",
     "wt_ema_filter_len",
     "wt_long_entry_max_above_zero",
     "wt_short_entry_min_below_zero",
-    "allow_shorts",
+    "atr_stop_enabled",
+    "atr_stop_multiplier",
+    "breakeven_trigger_atr",
+    "trailing_trigger_atr",
+    "trailing_distance_atr",
+    "wt_exhaustion_exit_enabled",
+    "wt_exhaustion_min_level",
     "fee_rate",
     "slippage_bps",
 ]
 
 PARAM_SUMMARY_LABELS = {
+    "trade_direction": "Direction",
     "wt_channel_len": "Channel",
     "wt_avg_len": "Average",
     "wt_signal_len": "Signal",
     "wt_min_signal_level": "Min level",
     "wt_long_entry_window_bars": "Re-entry window",
     "wt_long_require_ema20_reclaim": "EMA filter",
+    "wt_long_require_htf_trend": "HTF trend",
     "wt_ema_filter_len": "EMA length",
     "wt_long_entry_max_above_zero": "Long zone max",
     "wt_short_entry_min_below_zero": "Short zone min",
-    "allow_shorts": "Shorts enabled",
+    "atr_stop_enabled": "ATR stop",
+    "atr_stop_multiplier": "ATR stop x",
+    "breakeven_trigger_atr": "Break-even ATR",
+    "trailing_trigger_atr": "Trailing trigger ATR",
+    "trailing_distance_atr": "Trailing dist. ATR",
+    "wt_exhaustion_exit_enabled": "WT exhaustion exit",
+    "wt_exhaustion_min_level": "Exhaustion min",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -325,15 +366,16 @@ def hero_banner() -> html.Div:
             html.H2("Bee4 WaveTrend console"),
             html.P(
                 "Bee4 zachowuje dashboard bee1, ale domyslnie pracuje jako "
-                "WaveTrend long/short z lustrzanym re-entry i parametryzowanym filtrem EMA po obu stronach."
+                "WaveTrend z wyborem kierunku long/short/both, filtrem EMA i wyzszym trendem HTF "
+                "oraz ochroną pozycji przez ATR stop, break-even i trailing."
             ),
         ], className="hero-copy"),
         html.Div([
             html.Div("Note", className="hero-note-title"),
             html.P(
                 "Long pojawia sie na zielonej kropce w strefie ujemnej po odzyskaniu EMA, "
-                "short na czerwonej kropce w strefie dodatniej po odrzuceniu EMA, "
-                "a pozycja odwraca sie dopiero na przeciwnym sygnale."
+                "short na czerwonej kropce w strefie dodatniej po odrzuceniu EMA i zgodzie z trendem HTF, "
+                "a zysk jest chroniony przez ATR stop oraz trailing."
             ),
         ], className="hero-note"),
     ], className="hero-panel")
@@ -383,22 +425,23 @@ def fig_pdist(wd):
         ("best_wt_min_signal_level", "Min level", C["purple"]),
         ("best_wt_reentry_window_bars", "Re-entry", C["coral"]),
         ("best_wt_use_ema_filter", "EMA on/off", C["blue"]),
+        ("best_wt_use_htf_filter", "HTF trend", C["purple"]),
         ("best_wt_ema_filter_len", "EMA len", C["amber"]),
         ("best_wt_long_entry_max_above_zero", "Long zone", C["green"]),
         ("best_wt_short_entry_min_below_zero", "Short zone", C["red"]),
     ]
     fig = make_subplots(
-        rows=3,
-        cols=3,
+        rows=5,
+        cols=2,
         subplot_titles=[title for _, title, _ in specs],
-        vertical_spacing=0.16,
+        vertical_spacing=0.12,
         horizontal_spacing=0.08,
     )
     for idx, (col, _title, clr) in enumerate(specs):
         if col not in wd.columns:
             continue
-        row = idx // 3 + 1
-        col_idx = idx % 3 + 1
+        row = idx // 2 + 1
+        col_idx = idx % 2 + 1
         vc = wd[col].value_counts().sort_index()
         labels = ["on" if v is True else "off" if v is False else str(v) for v in vc.index]
         fig.add_trace(
@@ -406,7 +449,7 @@ def fig_pdist(wd):
             row=row,
             col=col_idx,
         )
-    fig.update_layout(**PT, height=640)
+    fig.update_layout(**PT, height=920)
     return fig
 
 def fig_fee(fd):
@@ -511,6 +554,8 @@ def _trade_detail_panel(trade: dict | None) -> html.Div:
                  "Min level", fmt_float(trade.get("entry_signal_level"), ".2f")),
             row2("EMA filter", fmt_float(trade.get("entry_ema_filter"), ".2f"),
                  "EMA length", fmt_text(trade.get("entry_ema_filter_len", "n/d"))),
+            row2("HTF EMA200", fmt_float(trade.get("entry_htf_ema200"), ".2f"),
+                 "ATR / stop", f"{fmt_float(trade.get('entry_atr'), '.2f')} / {fmt_float(trade.get('entry_stop_price'), '.2f')}"),
             row2("Strefa", fmt_text(trade.get("entry_zone")),
                  "Cross", fmt_text(trade.get("entry_cross_type"))),
             html.Div(style={"borderTop": f"1px solid {C['border']}", "margin": "8px 0"}),
@@ -575,6 +620,7 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         "entry_price", "exit_price", "gross_ret", "fee_ret", "net_ret",
         "pnl", "fee_usd", "entry_wt1", "entry_wt2", "entry_delta",
         "entry_signal_level", "entry_ema_filter", "entry_ema_filter_len",
+        "entry_htf_ema200", "entry_atr", "entry_stop_price",
         "exit_wt1", "exit_wt2", "exit_delta",
         "exit_signal_level",
     ]
@@ -1210,6 +1256,11 @@ def sidebar():
                 {"label": "Backtest manualny", "value": "backtest"},
                 {"label": "WFO", "value": "wfo"},
             ], "wfo")),
+            field("Kierunek", drp("inp-direction", [
+                {"label": "Oba kierunki", "value": "both"},
+                {"label": "Tylko long", "value": "long"},
+                {"label": "Tylko short", "value": "short"},
+            ], DEFAULT_PARAMS.get("trade_direction", "both"))),
             html.Div([
                 html.Div([field("Fee rate %", inp("inp-fee", round(FEE_RATE*100,4),
                                                    type="number",min=0,max=1,step=0.001))],style={"flex":"1"}),
@@ -1238,8 +1289,11 @@ def sidebar():
                 ], DEFAULT_PARAMS["wt_long_require_ema20_reclaim"]))], style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
+                html.Div([field("HTF trend", drp("inp-bt-htf-filter", [
+                    {"label": "Off", "value": False},
+                    {"label": "On", "value": True},
+                ], DEFAULT_PARAMS["wt_long_require_htf_trend"]))], style={"flex":"1"}),
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"flex":"1"}),
-                html.Div(style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Long zone max", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
@@ -1284,7 +1338,7 @@ def sidebar():
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka Min level"),
             dcc.Checklist(id="chk-grid-min-level",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_GRID],
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_OPTIONS],
                 value=WT_MIN_SIGNAL_LEVEL_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
@@ -1301,6 +1355,15 @@ def sidebar():
                     {"label":" On","value":True},
                 ],
                 value=WT_USE_EMA_FILTER_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Siatka HTF trend"),
+            dcc.Checklist(id="chk-grid-htf-filter",
+                options=[
+                    {"label":" Off","value":False},
+                    {"label":" On","value":True},
+                ],
+                value=WT_USE_HTF_TREND_FILTER_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Siatka EMA length"),
@@ -1322,7 +1385,7 @@ def sidebar():
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "Domyślne siatki są zawężone, żeby WFO szybko startowało. Możesz ręcznie zaznaczyć pełne strefy -10..-40 oraz 10..40 i EMA 8/10/15/20.",
+                "Domyślne siatki są zawężone, żeby WFO szybko startowało. Możesz ręcznie rozszerzyć min level do 60, strefy o 0/-5 i 0/+5 oraz EMA 8/10/15/20.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -1547,6 +1610,7 @@ def _worker(
     end,
     capital,
     run_mode,
+    direction,
     fee,
     slip,
     opt_days,
@@ -1558,6 +1622,7 @@ def _worker(
     bt_min_level,
     bt_reentry,
     bt_ema_filter,
+    bt_htf_filter,
     bt_ema_len,
     bt_long_zone,
     bt_short_zone,
@@ -1567,6 +1632,7 @@ def _worker(
     grid_min_level,
     grid_reentry,
     grid_ema_filter,
+    grid_htf_filter,
     grid_ema_len,
     grid_long_zone,
     grid_short_zone,
@@ -1617,12 +1683,14 @@ def _worker(
         slip_bps_val = float(slip if slip is not None and slip != "" else DEFAULT_PARAMS.get("slippage_bps", 0.0))
         run_mode = str(run_mode or "wfo").lower()
         strategy_params = _strategy_params_from_controls(
+            direction,
             bt_channel,
             bt_avg,
             bt_signal,
             bt_min_level,
             bt_reentry,
             bt_ema_filter,
+            bt_htf_filter,
             bt_ema_len,
             bt_long_zone,
             bt_short_zone,
@@ -1637,6 +1705,7 @@ def _worker(
             stats = compute_stats(trades_bt, equity_bt, capital, print_output=False)
             fee_df = fee_summary_by_period(trades_bt, capital, "ME") if not trades_bt.empty else pd.DataFrame()
             side_bk = breakdown_by_side(trades_bt) if not trades_bt.empty else pd.DataFrame()
+            cross_bk = breakdown_by_cross_type(trades_bt) if not trades_bt.empty else pd.DataFrame()
             yr_bk = breakdown_by_period(trades_bt, "YE") if not trades_bt.empty else pd.DataFrame()
             q_bk = breakdown_by_period(trades_bt, "QE") if not trades_bt.empty else pd.DataFrame()
             result = {
@@ -1650,6 +1719,7 @@ def _worker(
                 "equity": equity_bt.to_dict("records") if equity_bt is not None and not equity_bt.empty else [],
                 "fee_df": fee_df.to_dict("records") if not fee_df.empty else [],
                 "side_bk": side_bk.to_dict("records") if not side_bk.empty else [],
+                "cross_bk": cross_bk.to_dict("records") if not cross_bk.empty else [],
                 "yr_bk": yr_bk.to_dict("records") if not yr_bk.empty else [],
                 "q_bk": q_bk.to_dict("records") if not q_bk.empty else [],
                 "windows_df": [],
@@ -1674,6 +1744,7 @@ def _worker(
             grid_min_level,
             grid_reentry,
             grid_ema_filter,
+            grid_htf_filter,
             grid_ema_len,
             grid_long_zone,
             grid_short_zone,
@@ -1709,6 +1780,7 @@ def _worker(
                 fd     = fee_summary_by_period(all_tr, capital, "ME") \
                          if not all_tr.empty else pd.DataFrame()
                 sb     = breakdown_by_side(all_tr)    if not all_tr.empty else pd.DataFrame()
+                cb     = breakdown_by_cross_type(all_tr) if not all_tr.empty else pd.DataFrame()
                 yb     = breakdown_by_period(all_tr, "YE") if not all_tr.empty else pd.DataFrame()
                 qb     = breakdown_by_period(all_tr, "QE") if not all_tr.empty else pd.DataFrame()
                 r = {
@@ -1718,6 +1790,7 @@ def _worker(
                                   if equity_sofar is not None and not equity_sofar.empty else [],
                     "fee_df"    : fd.to_dict("records") if not fd.empty else [],
                     "side_bk"   : sb.to_dict("records") if not sb.empty else [],
+                    "cross_bk"  : cb.to_dict("records") if not cb.empty else [],
                     "yr_bk"     : yb.to_dict("records") if not yb.empty else [],
                     "q_bk"      : qb.to_dict("records") if not qb.empty else [],
                     "windows_df": wdf.to_dict("records") if not wdf.empty else [],
@@ -1750,9 +1823,12 @@ def _worker(
         stats   = compute_stats(all_trades, equity_wfo, capital, print_output=False)
         fee_df  = fee_summary_by_period(all_trades, capital, "ME") if all_trades is not None and not all_trades.empty else pd.DataFrame()
         side_bk = breakdown_by_side(all_trades) if all_trades is not None and not all_trades.empty else pd.DataFrame()
+        cross_bk = breakdown_by_cross_type(all_trades) if all_trades is not None and not all_trades.empty else pd.DataFrame()
         yr_bk   = breakdown_by_period(all_trades, "YE") if all_trades is not None and not all_trades.empty else pd.DataFrame()
         q_bk    = breakdown_by_period(all_trades, "QE") if all_trades is not None and not all_trades.empty else pd.DataFrame()
         best_params = get_latest_best_params(windows_df) if windows_df is not None and not windows_df.empty else {}
+        if best_params:
+            best_params = {**strategy_params, **best_params}
         if best_params:
             save_params(best_params, str(_APP_DIR / "bee4_wfo_best_params.json"))
 
@@ -1763,6 +1839,7 @@ def _worker(
             "equity"    : equity_wfo.to_dict("records")  if equity_wfo is not None and not equity_wfo.empty else [],
             "fee_df"    : fee_df.to_dict("records")      if not fee_df.empty  else [],
             "side_bk"   : side_bk.to_dict("records")    if not side_bk.empty else [],
+            "cross_bk"  : cross_bk.to_dict("records")   if not cross_bk.empty else [],
             "yr_bk"     : yr_bk.to_dict("records")      if not yr_bk.empty   else [],
             "q_bk"      : q_bk.to_dict("records")       if not q_bk.empty    else [],
             "windows_df": windows_df.to_dict("records")  if windows_df is not None and not windows_df.empty else [],
@@ -1886,28 +1963,31 @@ def export_trades(n_clicks, result_data):
     State("inp-mkt","value"),  State("inp-from","value"),
     State("inp-to","value"),   State("inp-cap","value"),
     State("inp-run-mode","value"),
+    State("inp-direction","value"),
     State("inp-fee","value"),  State("inp-slip","value"),
     State("inp-opt","value"),  State("inp-live","value"),
     State("inp-score","value"),
     State("inp-bt-channel","value"), State("inp-bt-avg","value"),
     State("inp-bt-signal","value"), State("inp-bt-min-level","value"),
     State("inp-bt-reentry","value"), State("inp-bt-ema-filter","value"),
+    State("inp-bt-htf-filter","value"),
     State("inp-bt-ema-len","value"),
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
+    State("chk-grid-htf-filter","value"),
     State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
     sym, tf, mkt, frm, to, cap,
-    run_mode, fee, slip, opt, live, score,
+    run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
-    bt_reentry, bt_ema_filter, bt_ema_len, bt_long_zone, bt_short_zone,
+    bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone,
     grid_channel, grid_avg, grid_signal, grid_min_level,
-    grid_reentry, grid_ema_filter, grid_ema_len, grid_long_zone, grid_short_zone):
+    grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -1927,11 +2007,12 @@ def on_run_stop(nr, ns,
             frm, to,
             float(cap or INITIAL_CAPITAL),
             run_mode or "wfo",
+            direction or DEFAULT_PARAMS.get("trade_direction", "both"),
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
-            bt_reentry, bt_ema_filter, bt_ema_len, bt_long_zone, bt_short_zone,
+            bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone,
             grid_channel, grid_avg, grid_signal, grid_min_level,
-            grid_reentry, grid_ema_filter, grid_ema_len, grid_long_zone, grid_short_zone,
+            grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj
@@ -2322,7 +2403,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
             return dash.no_update, metrics, html.Div([
                 dcc.Graph(
                     figure=fig_pdist(windows_df),
-                    style={"height": "640px"},
+                    style={"height": "920px"},
                     config={"displayModeBar": False},
                 ),
                 _params_summary_card(
@@ -2334,6 +2415,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
 
         if tab == "brkdwn":
             side_df = pd.DataFrame(r.get("side_bk", []))
+            cross_df = pd.DataFrame(r.get("cross_bk", []))
             yr_df = pd.DataFrame(r.get("yr_bk", []))
             q_df = pd.DataFrame(r.get("q_bk", []))
 
@@ -2388,6 +2470,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
             return dash.no_update, metrics, html.Div([
                 html.Div(ext, style={"display": "flex", "gap": "10px", "flexWrap": "wrap", "marginBottom": "14px"}),
                 mini(side_df, "Long vs Short"),
+                mini(cross_df, "Fresh cross vs Re-entry"),
                 mini(yr_df, "Breakdown roczny"),
                 mini(q_df, "Breakdown kwartalny"),
             ])

@@ -17,6 +17,7 @@ from bee4_engine import (
     Signal,
     apply_slippage,
     bar_from_row,
+    build_position_state,
     compute_trade_close,
     generate_entry_signal,
     generate_exit_signal,
@@ -49,6 +50,9 @@ class TradeRecord:
     entry_cross_type: str = ""
     entry_ema_filter: float = 0.0
     entry_ema_filter_len: int = 20
+    entry_htf_ema200: float = 0.0
+    entry_atr: float = 0.0
+    entry_stop_price: float = 0.0
     exit_wt1: float = 0.0
     exit_wt2: float = 0.0
     exit_delta: float = 0.0
@@ -122,6 +126,9 @@ class Bee4Strategy:
             entry_cross_type=em.get("cross_type", ""),
             entry_ema_filter=em.get("entry_ema_filter", 0.0),
             entry_ema_filter_len=em.get("entry_ema_filter_len", 20),
+            entry_htf_ema200=em.get("entry_htf_ema200", 0.0),
+            entry_atr=em.get("entry_atr", 0.0),
+            entry_stop_price=em.get("entry_stop_price", pos.stop_price),
             exit_wt1=xm.get("exit_wt1", 0.0),
             exit_wt2=xm.get("exit_wt2", 0.0),
             exit_delta=xm.get("exit_delta", 0.0),
@@ -170,11 +177,19 @@ class Bee4Strategy:
                         self.slippage_bps,
                         self.spread_bps,
                     )
-                    self.position = PositionState(
+                    entry_meta = dict(sig.meta or {})
+                    self.position = build_position_state(
                         side=side,
                         entry_price=entry_price,
                         entry_time=bar.time,
-                        entry_meta=sig.meta,
+                        bar=bar,
+                        params=self.params,
+                        entry_meta=entry_meta,
+                    )
+                    self.position.entry_meta["entry_stop_price"] = (
+                        round(self.position.stop_price, 4)
+                        if not np.isnan(self.position.stop_price)
+                        else np.nan
                     )
                     capital_at_open = capital
 
@@ -209,6 +224,9 @@ class Bee4Strategy:
             "entry_cross_type",
             "entry_ema_filter",
             "entry_ema_filter_len",
+            "entry_htf_ema200",
+            "entry_atr",
+            "entry_stop_price",
             "exit_wt1",
             "exit_wt2",
             "exit_delta",

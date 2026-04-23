@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import numpy as np
 import sys
 import time
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from bee4_engine import (
     PositionState,
     apply_slippage,
     bar_from_row as _bar_from_row,
+    build_position_state,
     compute_trade_close,
     generate_entry_signal,
     generate_exit_signal,
@@ -60,6 +62,8 @@ def load_state() -> dict:
             "bars_in_position": 0,
             "capital": INITIAL_CAPITAL,
             "capital_at_open": None,
+            "stop_price": None,
+            "entry_atr": None,
             "last_bar_time": None,
             "daily_loss_usd": 0.0,
             "daily_date": None,
@@ -118,6 +122,8 @@ def position_from_state(state: dict) -> Optional[PositionState]:
         entry_price=float(state["entry_price"]),
         entry_time=state["entry_time"],
         bars_in_position=int(state.get("bars_in_position", 0)),
+        stop_price=float(state["stop_price"]) if state.get("stop_price") is not None else float("nan"),
+        entry_atr=float(state["entry_atr"]) if state.get("entry_atr") is not None else float("nan"),
     )
 
 
@@ -128,11 +134,15 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["entry_time"] = None
         state["bars_in_position"] = 0
         state["capital_at_open"] = None
+        state["stop_price"] = None
+        state["entry_atr"] = None
     else:
         state["position"] = pos.side
         state["entry_price"] = pos.entry_price
         state["entry_time"] = str(pos.entry_time)
         state["bars_in_position"] = pos.bars_in_position
+        state["stop_price"] = None if np.isnan(pos.stop_price) else pos.stop_price
+        state["entry_atr"] = None if np.isnan(pos.entry_atr) else pos.entry_atr
 
 
 def execute_order(
@@ -227,7 +237,7 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
             )
             position_to_state(state, None)
         else:
-            state["bars_in_position"] = position.bars_in_position
+            position_to_state(state, position)
 
     if state.get("position") is None:
         sig = generate_entry_signal(bar, prev, params, None)
@@ -240,7 +250,18 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
             exec_price = apply_slippage(raw_entry, side, "open", slip_bps, spread_bps)
             exec_price = execute_order(side, "open", exec_price, capital, mode, sig.reason)
 
-            new_pos = PositionState(side=side, entry_price=exec_price, entry_time=bar_time_str, entry_meta=sig.meta)
+            entry_meta = dict(sig.meta or {})
+            new_pos = build_position_state(
+                side=side,
+                entry_price=exec_price,
+                entry_time=bar_time_str,
+                bar=bar,
+                params=params,
+                entry_meta=entry_meta,
+            )
+            new_pos.entry_meta["entry_stop_price"] = (
+                round(new_pos.stop_price, 4) if not np.isnan(new_pos.stop_price) else np.nan
+            )
             position_to_state(state, new_pos)
             state["capital_at_open"] = capital
             log.info(

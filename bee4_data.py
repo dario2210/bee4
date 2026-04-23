@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 
 from bee4_params import (
+    ATR_LEN,
+    HTF_EMA_INTERVAL,
+    HTF_EMA_LEN,
     WT_CHANNEL_LEN,
     WT_AVG_LEN,
     WT_SIGNAL_LEN,
@@ -41,6 +44,61 @@ def _bars_since_flag(flag: pd.Series) -> pd.Series:
             last_idx = idx
         values.append(np.nan if last_idx is None else float(idx - last_idx))
     return pd.Series(values, index=flag.index, dtype="float64")
+
+
+def _estimate_base_tf_minutes(df: pd.DataFrame) -> float:
+    if "time" not in df.columns or len(df) < 2:
+        return 0.0
+    diffs = (
+        pd.to_datetime(df["time"], utc=True, errors="coerce")
+        .sort_values()
+        .diff()
+        .dropna()
+        .dt.total_seconds()
+        / 60.0
+    )
+    if diffs.empty:
+        return 0.0
+    return float(diffs.median())
+
+
+def _higher_timeframe_ema(
+    df: pd.DataFrame,
+    target_interval: str = HTF_EMA_INTERVAL,
+    ema_len: int = HTF_EMA_LEN,
+) -> pd.Series:
+    times = pd.to_datetime(df["time"], utc=True, errors="coerce")
+    close = pd.to_numeric(df["close"], errors="coerce")
+    base_minutes = _estimate_base_tf_minutes(df)
+    target_minutes = pd.Timedelta(target_interval).total_seconds() / 60.0
+
+    if base_minutes <= 0 or base_minutes >= target_minutes:
+        return close.ewm(span=int(ema_len), adjust=False).mean()
+
+    resampled = (
+        pd.DataFrame({"time": times, "close": close})
+        .dropna(subset=["time"])
+        .set_index("time")["close"]
+        .resample(target_interval)
+        .last()
+        .dropna()
+    )
+    ema_htf = resampled.ewm(span=int(ema_len), adjust=False).mean()
+    aligned = ema_htf.reindex(times, method="ffill")
+    return pd.Series(aligned.to_numpy(), index=df.index, dtype="float64")
+
+
+def _atr(df: pd.DataFrame, length: int = ATR_LEN) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.ewm(alpha=1.0 / max(int(length), 1), adjust=False).mean()
 
 
 def compute_wave_trend(
@@ -105,6 +163,9 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     for ema_len in ema_lens:
         df[f"ema_{int(ema_len)}"] = df["close"].ewm(span=int(ema_len), adjust=False).mean()
     df["ema20"] = df["ema_20"]
+    df["htf_ema200"] = _higher_timeframe_ema(df, target_interval=HTF_EMA_INTERVAL, ema_len=HTF_EMA_LEN)
+    df["atr_14"] = _atr(df, ATR_LEN)
+    df["atr"] = df["atr_14"]
     df["wt1"] = df[default_wt1_col]
     df["wt2"] = df[default_wt2_col]
     df["wt_delta"] = df["wt1"] - df["wt2"]

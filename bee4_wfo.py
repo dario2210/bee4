@@ -25,6 +25,7 @@ from bee4_params import (
     WT_CHANNEL_LEN_GRID,
     WT_EMA_FILTER_LEN,
     WT_EMA_FILTER_LEN_GRID,
+    WT_LONG_REQUIRE_HTF_TREND,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
     WT_LONG_ENTRY_WINDOW_BARS,
@@ -34,9 +35,11 @@ from bee4_params import (
     WT_SIGNAL_LEN,
     WT_SIGNAL_LEN_GRID,
     WT_REENTRY_WINDOW_GRID,
+    WT_SHORT_REQUIRE_HTF_TREND,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
     WT_USE_EMA_FILTER_GRID,
+    WT_USE_HTF_TREND_FILTER_GRID,
 )
 from bee4_strategy import Bee4Strategy
 from bee4_wfo_scoring import score_params
@@ -50,6 +53,52 @@ def _clean_grid(values, fallback, caster):
         if casted not in cleaned:
             cleaned.append(casted)
     return cleaned
+
+
+def _param_key(params: dict, names: list[str]) -> tuple:
+    return tuple(params.get(name) for name in names)
+
+
+def _snap_to_top_values(values: list, sample):
+    if isinstance(sample, bool):
+        return bool(pd.Series(values).mode(dropna=False).iloc[0])
+
+    unique = sorted(set(values))
+    median = float(np.median([float(v) for v in values]))
+    chosen = min(unique, key=lambda v: abs(float(v) - median))
+    return int(chosen) if isinstance(sample, (int, np.integer)) else float(chosen)
+
+
+def _select_robust_window_params(results: list[dict], param_names: list[str]) -> dict | None:
+    if not results:
+        return None
+
+    ranked = sorted(results, key=lambda r: r["score"], reverse=True)
+    top_n = max(1, int(np.ceil(len(ranked) * 0.1)))
+    top = ranked[:top_n]
+
+    aggregate_params = {}
+    for name in param_names:
+        values = [row["params"][name] for row in top]
+        aggregate_params[name] = _snap_to_top_values(values, values[0])
+
+    target = _param_key(aggregate_params, param_names)
+    lookup = {_param_key(row["params"], param_names): row for row in ranked}
+    chosen = lookup.get(target)
+    if chosen is None:
+        chosen = max(
+            top,
+            key=lambda row: (
+                sum(row["params"][name] == aggregate_params[name] for name in param_names),
+                row["score"],
+            ),
+        )
+
+    return {
+        "row": chosen,
+        "aggregate_params": aggregate_params,
+        "top_n": top_n,
+    }
 
 
 def walk_forward_optimization(
@@ -79,6 +128,7 @@ def walk_forward_optimization(
     min_level_grid = _clean_grid(grid_overrides.get("wt_min_signal_level"), WT_MIN_SIGNAL_LEVEL_GRID, float)
     reentry_grid = _clean_grid(grid_overrides.get("wt_reentry_window_bars"), WT_REENTRY_WINDOW_GRID, int)
     ema_filter_grid = _clean_grid(grid_overrides.get("wt_use_ema_filter"), WT_USE_EMA_FILTER_GRID, bool)
+    htf_filter_grid = _clean_grid(grid_overrides.get("wt_use_htf_filter"), WT_USE_HTF_TREND_FILTER_GRID, bool)
     ema_len_grid = _clean_grid(grid_overrides.get("wt_ema_filter_len"), WT_EMA_FILTER_LEN_GRID, int)
     long_zone_grid = _clean_grid(
         grid_overrides.get("wt_long_entry_max_above_zero"),
@@ -110,6 +160,7 @@ def walk_forward_optimization(
         * len(min_level_grid)
         * len(reentry_grid)
         * len(ema_filter_grid)
+        * len(htf_filter_grid)
         * len(ema_len_grid)
         * len(long_zone_grid)
         * len(short_zone_grid),
@@ -131,10 +182,23 @@ def walk_forward_optimization(
         opt_slice = df.iloc[start : start + opt_bars]
         live_slice = df.iloc[start + opt_bars : start + opt_bars + live_bars]
 
+        selection_keys = [
+            "wt_channel_len",
+            "wt_avg_len",
+            "wt_signal_len",
+            "wt_min_signal_level",
+            "wt_long_entry_window_bars",
+            "wt_long_require_ema20_reclaim",
+            "wt_long_require_htf_trend",
+            "wt_ema_filter_len",
+            "wt_long_entry_max_above_zero",
+            "wt_short_entry_min_below_zero",
+        ]
         best_score = -1e9
         best_params = None
         best_opt_trades = None
         best_opt_cap = opt_capital
+        opt_results: list[dict] = []
 
         if on_combo_progress is not None:
             on_combo_progress(window_id, total_windows, 0, combo_total)
@@ -147,6 +211,7 @@ def walk_forward_optimization(
             wt_min_signal_level,
             wt_reentry_window_bars,
             wt_use_ema_filter,
+            wt_use_htf_filter,
             wt_ema_filter_len,
             wt_long_entry_max_above_zero,
             wt_short_entry_min_below_zero,
@@ -157,6 +222,7 @@ def walk_forward_optimization(
             min_level_grid,
             reentry_grid,
             ema_filter_grid,
+            htf_filter_grid,
             ema_len_grid,
             long_zone_grid,
             short_zone_grid,
@@ -184,6 +250,8 @@ def walk_forward_optimization(
                     "wt_short_entry_window_bars": wt_reentry_window_bars,
                     "wt_long_require_ema20_reclaim": bool(wt_use_ema_filter),
                     "wt_short_require_ema20_reject": bool(wt_use_ema_filter),
+                    "wt_long_require_htf_trend": bool(wt_use_htf_filter),
+                    "wt_short_require_htf_trend": bool(wt_use_htf_filter),
                     "wt_ema_filter_len": int(wt_ema_filter_len),
                     "wt_long_entry_max_above_zero": wt_long_entry_max_above_zero,
                     "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
@@ -192,6 +260,14 @@ def walk_forward_optimization(
             strat = Bee4Strategy(params, fee_rate=fee_rate)
             trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
             score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
+            opt_results.append(
+                {
+                    "params": params,
+                    "trades": trades_opt,
+                    "final_capital": final_cap_opt,
+                    "score": score,
+                }
+            )
             if score > best_score:
                 best_score = score
                 best_params = params
@@ -207,6 +283,18 @@ def walk_forward_optimization(
             if verbose:
                 print(f"[WFO] Window {window_id}: no usable params, stopping.")
             break
+
+        robust_pick = _select_robust_window_params(opt_results, selection_keys)
+        if robust_pick is None:
+            if verbose:
+                print(f"[WFO] Window {window_id}: no robust candidate, stopping.")
+            break
+
+        best_row = robust_pick["row"]
+        best_params = dict(best_row["params"])
+        best_opt_trades = best_row["trades"]
+        best_opt_cap = best_row["final_capital"]
+        best_score = best_row["score"]
 
         opt_n_trades = 0 if best_opt_trades is None or best_opt_trades.empty else len(best_opt_trades)
         opt_ret_pct = (best_opt_cap / opt_capital - 1.0) * 100.0
@@ -233,9 +321,12 @@ def walk_forward_optimization(
             trades_live["wt_min_signal_level"] = best_params["wt_min_signal_level"]
             trades_live["wt_reentry_window_bars"] = best_params["wt_long_entry_window_bars"]
             trades_live["wt_use_ema_filter"] = best_params["wt_long_require_ema20_reclaim"]
+            trades_live["wt_use_htf_filter"] = best_params["wt_long_require_htf_trend"]
             trades_live["wt_ema_filter_len"] = best_params["wt_ema_filter_len"]
             trades_live["wt_long_entry_max_above_zero"] = best_params["wt_long_entry_max_above_zero"]
             trades_live["wt_short_entry_min_below_zero"] = best_params["wt_short_entry_min_below_zero"]
+            trades_live["allow_longs"] = bool(best_params.get("allow_longs", True))
+            trades_live["allow_shorts"] = bool(best_params.get("allow_shorts", True))
             all_live_trades.append(trades_live)
 
         if equity_live is not None and not equity_live.empty:
@@ -259,9 +350,12 @@ def walk_forward_optimization(
                 "best_wt_min_signal_level": best_params["wt_min_signal_level"],
                 "best_wt_reentry_window_bars": best_params["wt_long_entry_window_bars"],
                 "best_wt_use_ema_filter": best_params["wt_long_require_ema20_reclaim"],
+                "best_wt_use_htf_filter": best_params["wt_long_require_htf_trend"],
                 "best_wt_ema_filter_len": best_params["wt_ema_filter_len"],
                 "best_wt_long_entry_max_above_zero": best_params["wt_long_entry_max_above_zero"],
                 "best_wt_short_entry_min_below_zero": best_params["wt_short_entry_min_below_zero"],
+                "allow_longs": bool(best_params.get("allow_longs", True)),
+                "allow_shorts": bool(best_params.get("allow_shorts", True)),
                 "opt_score": best_score,
                 "opt_return_pct": opt_ret_pct,
                 "opt_pf": opt_pf,
@@ -270,6 +364,8 @@ def walk_forward_optimization(
                 "live_return_pct": live_ret_pct,
                 "live_final_cap": final_cap_live,
                 "n_trades_live": n_trades_live,
+                "selection_method": "top_decile_median",
+                "selection_top_n": robust_pick["top_n"],
             }
         )
 
@@ -283,6 +379,7 @@ def walk_forward_optimization(
                 f"sig={best_params['wt_signal_len']} minlvl={best_params['wt_min_signal_level']:.1f} "
                 f"re={best_params['wt_long_entry_window_bars']} "
                 f"ema={'on' if best_params['wt_long_require_ema20_reclaim'] else 'off'} "
+                f"htf={'on' if best_params['wt_long_require_htf_trend'] else 'off'} "
                 f"emalen={best_params['wt_ema_filter_len']} "
                 f"lz={best_params['wt_long_entry_max_above_zero']:.1f} "
                 f"sz={best_params['wt_short_entry_min_below_zero']:.1f}"
@@ -339,6 +436,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_use_ema_filter" in recent.columns
         else WT_LONG_REQUIRE_EMA20_RECLAIM
     )
+    use_htf_filter = (
+        bool(recent["best_wt_use_htf_filter"].mode().iloc[0])
+        if "best_wt_use_htf_filter" in recent.columns
+        else WT_LONG_REQUIRE_HTF_TREND
+    )
     ema_filter_len = (
         int(recent["best_wt_ema_filter_len"].mode().iloc[0])
         if "best_wt_ema_filter_len" in recent.columns
@@ -354,8 +456,20 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_short_entry_min_below_zero" in recent.columns
         else WT_SHORT_ENTRY_MIN_BELOW_ZERO
     )
+    allow_longs = (
+        bool(recent["allow_longs"].mode().iloc[0])
+        if "allow_longs" in recent.columns
+        else True
+    )
+    allow_shorts = (
+        bool(recent["allow_shorts"].mode().iloc[0])
+        if "allow_shorts" in recent.columns
+        else True
+    )
 
     return {
+        "allow_longs": allow_longs,
+        "allow_shorts": allow_shorts,
         "wt_channel_len": channel_len,
         "wt_avg_len": avg_len,
         "wt_signal_len": signal_len,
@@ -364,6 +478,8 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_short_entry_window_bars": reentry_window,
         "wt_long_require_ema20_reclaim": use_ema_filter,
         "wt_short_require_ema20_reject": use_ema_filter,
+        "wt_long_require_htf_trend": use_htf_filter,
+        "wt_short_require_htf_trend": use_htf_filter,
         "wt_ema_filter_len": ema_filter_len,
         "wt_long_entry_max_above_zero": long_entry_max_above_zero,
         "wt_short_entry_min_below_zero": short_entry_min_below_zero,
