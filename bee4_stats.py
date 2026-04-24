@@ -291,13 +291,10 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_channel_len", "Channel"),
         ("best_wt_avg_len", "Average"),
         ("best_wt_signal_len", "Signal"),
-        ("best_wt_min_signal_level", "Min level"),
-        ("best_wt_reentry_window_bars", "Re-entry"),
-        ("best_wt_use_ema_filter", "EMA on"),
-        ("best_wt_use_htf_filter", "HTF on"),
-        ("best_wt_ema_filter_len", "EMA len"),
-        ("best_wt_long_entry_max_above_zero", "Long zone"),
-        ("best_wt_short_entry_min_below_zero", "Short zone"),
+        ("best_wt_long_entry_max_above_zero", "Long zone H1"),
+        ("best_wt_short_entry_min_below_zero", "Short zone H1"),
+        ("best_wt_h4_long_filter_max", "Long filter H4"),
+        ("best_wt_h4_short_filter_min", "Short filter H4"),
     ]:
         if col in windows_df.columns:
             vals = windows_df[col].value_counts().sort_index()
@@ -308,13 +305,10 @@ def print_wfo_windows(windows_df: pd.DataFrame) -> None:
         ("best_wt_channel_len", "Channel"),
         ("best_wt_avg_len", "Average"),
         ("best_wt_signal_len", "Signal"),
-        ("best_wt_min_signal_level", "Min level"),
-        ("best_wt_reentry_window_bars", "Re-entry"),
-        ("best_wt_use_ema_filter", "EMA on"),
-        ("best_wt_use_htf_filter", "HTF on"),
-        ("best_wt_ema_filter_len", "EMA len"),
-        ("best_wt_long_entry_max_above_zero", "Long zone"),
-        ("best_wt_short_entry_min_below_zero", "Short zone"),
+        ("best_wt_long_entry_max_above_zero", "Long zone H1"),
+        ("best_wt_short_entry_min_below_zero", "Short zone H1"),
+        ("best_wt_h4_long_filter_max", "Long filter H4"),
+        ("best_wt_h4_short_filter_min", "Short filter H4"),
     ]:
         if col in windows_df.columns:
             avg = windows_df.groupby(col)["live_return_pct"].mean()
@@ -404,7 +398,7 @@ def breakdown_by_side(trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def breakdown_by_cross_type(trades: pd.DataFrame) -> pd.DataFrame:
-    """Fresh cross vs re-entry performance breakdown."""
+    """Entry performance breakdown by stored H1 cross type."""
     if trades is None or trades.empty or "entry_cross_type" not in trades.columns:
         return pd.DataFrame()
     grp = trades.groupby("entry_cross_type")
@@ -451,7 +445,7 @@ def print_extended_report(
     print("\n── Breakdown Long / Short ──────────────────────────────────")
     print(breakdown_by_side(trades).to_string(index=False))
 
-    print("\n── Fresh cross vs Re-entry ─────────────────────────────────")
+    print("\n── Entry Cross Type ────────────────────────────────────────")
     cross_df = breakdown_by_cross_type(trades)
     if not cross_df.empty:
         print(cross_df.to_string(index=False))

@@ -150,29 +150,13 @@ def _strategy_params_from_controls(
     ema_filter_len,
     long_zone,
     short_zone,
+    h4_long_filter,
+    h4_short_filter,
     fee_rate: float,
     slippage_bps: float,
 ) -> dict:
     params = dict(DEFAULT_PARAMS)
     trade_direction, allow_longs, allow_shorts = _direction_flags(direction)
-    use_ema_filter = _parse_bool_value(
-        ema_filter,
-        DEFAULT_PARAMS["wt_long_require_ema20_reclaim"],
-    )
-    use_htf_filter = _parse_bool_value(
-        htf_filter,
-        DEFAULT_PARAMS["wt_long_require_htf_trend"],
-    )
-    reentry_window = int(
-        reentry_window
-        if reentry_window not in (None, "")
-        else DEFAULT_PARAMS["wt_long_entry_window_bars"]
-    )
-    ema_filter_len = int(
-        ema_filter_len
-        if ema_filter_len not in (None, "")
-        else DEFAULT_PARAMS["wt_ema_filter_len"]
-    )
     params.update(
         {
             "trade_direction": trade_direction,
@@ -181,22 +165,31 @@ def _strategy_params_from_controls(
             "wt_channel_len": int(channel_len if channel_len not in (None, "") else DEFAULT_PARAMS["wt_channel_len"]),
             "wt_avg_len": int(avg_len if avg_len not in (None, "") else DEFAULT_PARAMS["wt_avg_len"]),
             "wt_signal_len": int(signal_len if signal_len not in (None, "") else DEFAULT_PARAMS["wt_signal_len"]),
-            "wt_min_signal_level": float(
-                min_level if min_level not in (None, "") else DEFAULT_PARAMS["wt_min_signal_level"]
-            ),
-            "wt_long_entry_window_bars": reentry_window,
-            "wt_short_entry_window_bars": reentry_window,
-            "wt_long_require_ema20_reclaim": use_ema_filter,
-            "wt_short_require_ema20_reject": use_ema_filter,
-            "wt_long_require_htf_trend": use_htf_filter,
-            "wt_short_require_htf_trend": use_htf_filter,
-            "wt_ema_filter_len": ema_filter_len,
+            "wt_min_signal_level": 0.0,
+            "wt_long_entry_window_bars": 0,
+            "wt_short_entry_window_bars": 0,
+            "wt_long_require_ema20_reclaim": False,
+            "wt_short_require_ema20_reject": False,
+            "wt_long_require_htf_trend": False,
+            "wt_short_require_htf_trend": False,
+            "wt_ema_filter_len": int(DEFAULT_PARAMS["wt_ema_filter_len"]),
             "wt_long_entry_max_above_zero": float(
                 long_zone if long_zone not in (None, "") else DEFAULT_PARAMS["wt_long_entry_max_above_zero"]
             ),
             "wt_short_entry_min_below_zero": float(
                 short_zone if short_zone not in (None, "") else DEFAULT_PARAMS["wt_short_entry_min_below_zero"]
             ),
+            "wt_h4_long_filter_max": float(
+                h4_long_filter if h4_long_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_long_filter_max"]
+            ),
+            "wt_h4_short_filter_min": float(
+                h4_short_filter if h4_short_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_short_filter_min"]
+            ),
+            "atr_stop_enabled": False,
+            "breakeven_trigger_atr": 0.0,
+            "trailing_trigger_atr": 0.0,
+            "wt_exhaustion_exit_enabled": False,
+            "max_bars_in_trade": 0,
             "fee_rate": float(fee_rate),
             "slippage_bps": float(slippage_bps),
         }
@@ -250,20 +243,10 @@ PARAM_SUMMARY_ORDER = [
     "wt_channel_len",
     "wt_avg_len",
     "wt_signal_len",
-    "wt_min_signal_level",
-    "wt_long_entry_window_bars",
-    "wt_long_require_ema20_reclaim",
-    "wt_long_require_htf_trend",
-    "wt_ema_filter_len",
     "wt_long_entry_max_above_zero",
     "wt_short_entry_min_below_zero",
-    "atr_stop_enabled",
-    "atr_stop_multiplier",
-    "breakeven_trigger_atr",
-    "trailing_trigger_atr",
-    "trailing_distance_atr",
-    "wt_exhaustion_exit_enabled",
-    "wt_exhaustion_min_level",
+    "wt_h4_long_filter_max",
+    "wt_h4_short_filter_min",
     "fee_rate",
     "slippage_bps",
 ]
@@ -273,20 +256,10 @@ PARAM_SUMMARY_LABELS = {
     "wt_channel_len": "Channel",
     "wt_avg_len": "Average",
     "wt_signal_len": "Signal",
-    "wt_min_signal_level": "Min level",
-    "wt_long_entry_window_bars": "Re-entry window",
-    "wt_long_require_ema20_reclaim": "EMA filter",
-    "wt_long_require_htf_trend": "HTF trend",
-    "wt_ema_filter_len": "EMA length",
-    "wt_long_entry_max_above_zero": "Long zone max",
-    "wt_short_entry_min_below_zero": "Short zone min",
-    "atr_stop_enabled": "ATR stop",
-    "atr_stop_multiplier": "ATR stop x",
-    "breakeven_trigger_atr": "Break-even ATR",
-    "trailing_trigger_atr": "Trailing trigger ATR",
-    "trailing_distance_atr": "Trailing dist. ATR",
-    "wt_exhaustion_exit_enabled": "WT exhaustion exit",
-    "wt_exhaustion_min_level": "Exhaustion min",
+    "wt_long_entry_max_above_zero": "Long zone H1",
+    "wt_short_entry_min_below_zero": "Short zone H1",
+    "wt_h4_long_filter_max": "Long filter H4",
+    "wt_h4_short_filter_min": "Short filter H4",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -365,17 +338,15 @@ def hero_banner() -> html.Div:
             html.Div("TradingView open source", className="hero-eyebrow"),
             html.H2("Bee4 WaveTrend console"),
             html.P(
-                "Bee4 zachowuje dashboard bee1, ale domyslnie pracuje jako "
-                "WaveTrend z wyborem kierunku long/short/both, filtrem EMA i wyzszym trendem HTF "
-                "oraz ochroną pozycji przez ATR stop, break-even i trailing."
+                "Bee4 zachowuje dashboard bee1, ale w galezi BEE4_2 pracuje jako "
+                "WaveTrend H1 z natychmiastowym wejsciem na kropce oraz filtrem WT liczonym z H4."
             ),
         ], className="hero-copy"),
         html.Div([
             html.Div("Note", className="hero-note-title"),
             html.P(
-                "Long pojawia sie na zielonej kropce w strefie ujemnej po odzyskaniu EMA, "
-                "short na czerwonej kropce w strefie dodatniej po odrzuceniu EMA i zgodzie z trendem HTF, "
-                "a zysk jest chroniony przez ATR stop oraz trailing."
+                "Long pojawia sie na zielonej kropce H1 przy glebokim WT oraz tylko wtedy, gdy linie WT z H4 sa nisko i zblizaja sie do siebie. "
+                "Short dziala lustrzanie, a wyjscie nastepuje dopiero na przeciwnym setupie."
             ),
         ], className="hero-note"),
     ], className="hero-panel")
@@ -422,16 +393,13 @@ def fig_pdist(wd):
         ("best_wt_channel_len", "Channel", C["blue"]),
         ("best_wt_avg_len", "Average", C["green"]),
         ("best_wt_signal_len", "Signal", C["amber"]),
-        ("best_wt_min_signal_level", "Min level", C["purple"]),
-        ("best_wt_reentry_window_bars", "Re-entry", C["coral"]),
-        ("best_wt_use_ema_filter", "EMA on/off", C["blue"]),
-        ("best_wt_use_htf_filter", "HTF trend", C["purple"]),
-        ("best_wt_ema_filter_len", "EMA len", C["amber"]),
-        ("best_wt_long_entry_max_above_zero", "Long zone", C["green"]),
-        ("best_wt_short_entry_min_below_zero", "Short zone", C["red"]),
+        ("best_wt_long_entry_max_above_zero", "Long zone H1", C["green"]),
+        ("best_wt_short_entry_min_below_zero", "Short zone H1", C["red"]),
+        ("best_wt_h4_long_filter_max", "Long filter H4", C["purple"]),
+        ("best_wt_h4_short_filter_min", "Short filter H4", C["coral"]),
     ]
     fig = make_subplots(
-        rows=5,
+        rows=4,
         cols=2,
         subplot_titles=[title for _, title, _ in specs],
         vertical_spacing=0.12,
@@ -556,8 +524,12 @@ def _trade_detail_panel(trade: dict | None) -> html.Div:
                  "EMA length", fmt_text(trade.get("entry_ema_filter_len", "n/d"))),
             row2("HTF EMA200", fmt_float(trade.get("entry_htf_ema200"), ".2f"),
                  "ATR / stop", f"{fmt_float(trade.get('entry_atr'), '.2f')} / {fmt_float(trade.get('entry_stop_price'), '.2f')}"),
-            row2("Strefa", fmt_text(trade.get("entry_zone")),
+            row2("H4 WT1", fmt_float(trade.get("entry_h4_wt1"), ".2f"),
+                 "H4 WT2", fmt_float(trade.get("entry_h4_wt2"), ".2f")),
+            row2("H4 delta", fmt_float(trade.get("entry_h4_delta"), ".2f"),
                  "Cross", fmt_text(trade.get("entry_cross_type"))),
+            row2("Strefa", fmt_text(trade.get("entry_zone")),
+                 "Window WFO", fmt_text(trade.get("window_id", "n/d"))),
             html.Div(style={"borderTop": f"1px solid {C['border']}", "margin": "8px 0"}),
             html.Div("Snapshot wyjscia", style={"fontSize": "10px", "color": C["muted"],
                 "fontWeight": "600", "textTransform": "uppercase", "letterSpacing": "0.05em",
@@ -566,8 +538,10 @@ def _trade_detail_panel(trade: dict | None) -> html.Div:
                  "WT2 wyjscie", fmt_float(trade.get("exit_wt2"), ".2f")),
             row2("Delta wyjscie", fmt_float(trade.get("exit_delta"), ".2f"),
                  "Strefa", fmt_text(trade.get("exit_zone"))),
+            row2("H4 WT1 wyjscie", fmt_float(trade.get("exit_h4_wt1"), ".2f"),
+                 "H4 WT2 wyjscie", fmt_float(trade.get("exit_h4_wt2"), ".2f")),
             row2("Trigger", fmt_text(trade.get("exit_trigger", trade.get("reason"))),
-                 "Window WFO", fmt_text(trade.get("window_id", "n/d"))),
+                 "H4 delta wyjscie", fmt_float(trade.get("exit_h4_delta"), ".2f")),
         ]),
     ], style={"background": C["surface"], "border": f"1px solid {C['border']}",
               "borderRadius": "10px", "padding": "16px 20px", "marginTop": "12px"})
@@ -621,8 +595,9 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         "pnl", "fee_usd", "entry_wt1", "entry_wt2", "entry_delta",
         "entry_signal_level", "entry_ema_filter", "entry_ema_filter_len",
         "entry_htf_ema200", "entry_atr", "entry_stop_price",
+        "entry_h4_wt1", "entry_h4_wt2", "entry_h4_delta",
         "exit_wt1", "exit_wt2", "exit_delta",
-        "exit_signal_level",
+        "exit_signal_level", "exit_h4_wt1", "exit_h4_wt2", "exit_h4_delta",
     ]
     for col in numeric_cols:
         if col in tdf.columns:
@@ -1279,28 +1254,35 @@ def sidebar():
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Signal", inp("inp-bt-signal", DEFAULT_PARAMS["wt_signal_len"], type="number", min=2, step=1))], style={"flex":"1"}),
-                html.Div([field("Min level", inp("inp-bt-min-level", DEFAULT_PARAMS["wt_min_signal_level"], type="number", step=1))], style={"flex":"1"}),
+                html.Div(
+                    [field("Min level", inp("inp-bt-min-level", DEFAULT_PARAMS["wt_min_signal_level"], type="number", step=1))],
+                    style={"display":"none"},
+                ),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
-                html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
+                html.Div([field("Long zone H1", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Short zone H1", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("Long filter H4", inp("inp-bt-h4-long", DEFAULT_PARAMS["wt_h4_long_filter_max"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
                     {"label": "Off", "value": False},
                     {"label": "On", "value": True},
-                ], DEFAULT_PARAMS["wt_long_require_ema20_reclaim"]))], style={"flex":"1"}),
+                ], DEFAULT_PARAMS["wt_long_require_ema20_reclaim"]))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("HTF trend", drp("inp-bt-htf-filter", [
                     {"label": "Off", "value": False},
                     {"label": "On", "value": True},
-                ], DEFAULT_PARAMS["wt_long_require_htf_trend"]))], style={"flex":"1"}),
-                html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"flex":"1"}),
-            ], style={"display":"flex","gap":"8px"}),
-            html.Div([
-                html.Div([field("Long zone max", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
-                html.Div([field("Short zone min", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"flex":"1"}),
+                ], DEFAULT_PARAMS["wt_long_require_htf_trend"]))], style={"display":"none"}),
+                html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "Te wartości są używane tylko w trybie Backtest manualny.",
+                "BEE4_2: wejście jest od razu na świeżej kropce H1 w głębokiej strefie WT, a filtr robią dwie linie WaveTrend z H4. Stop loss, re-entry i filtry EMA są w tej gałęzi wyłączone.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -1336,42 +1318,44 @@ def sidebar():
                 value=WT_SIGNAL_LEN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka Min level"),
-            dcc.Checklist(id="chk-grid-min-level",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_OPTIONS],
-                value=WT_MIN_SIGNAL_LEVEL_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka Re-entry"),
-            dcc.Checklist(id="chk-grid-reentry",
-                options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
-                value=WT_REENTRY_WINDOW_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka EMA on/off"),
-            dcc.Checklist(id="chk-grid-ema-filter",
-                options=[
-                    {"label":" Off","value":False},
-                    {"label":" On","value":True},
-                ],
-                value=WT_USE_EMA_FILTER_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka HTF trend"),
-            dcc.Checklist(id="chk-grid-htf-filter",
-                options=[
-                    {"label":" Off","value":False},
-                    {"label":" On","value":True},
-                ],
-                value=WT_USE_HTF_TREND_FILTER_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka EMA length"),
-            dcc.Checklist(id="chk-grid-ema-len",
-                options=[{"label":f" {v}","value":v} for v in WT_EMA_FILTER_LEN_OPTIONS],
-                value=WT_EMA_FILTER_LEN_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            html.Div([
+                sec("Siatka Min level"),
+                dcc.Checklist(id="chk-grid-min-level",
+                    options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_OPTIONS],
+                    value=WT_MIN_SIGNAL_LEVEL_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Siatka Re-entry"),
+                dcc.Checklist(id="chk-grid-reentry",
+                    options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
+                    value=WT_REENTRY_WINDOW_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Siatka EMA on/off"),
+                dcc.Checklist(id="chk-grid-ema-filter",
+                    options=[
+                        {"label":" Off","value":False},
+                        {"label":" On","value":True},
+                    ],
+                    value=WT_USE_EMA_FILTER_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Siatka HTF trend"),
+                dcc.Checklist(id="chk-grid-htf-filter",
+                    options=[
+                        {"label":" Off","value":False},
+                        {"label":" On","value":True},
+                    ],
+                    value=WT_USE_HTF_TREND_FILTER_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Siatka EMA length"),
+                dcc.Checklist(id="chk-grid-ema-len",
+                    options=[{"label":f" {v}","value":v} for v in WT_EMA_FILTER_LEN_OPTIONS],
+                    value=WT_EMA_FILTER_LEN_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ], style={"display":"none"}),
             sec("Long zone max"),
             dcc.Checklist(id="chk-grid-long-zone",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS],
@@ -1385,7 +1369,7 @@ def sidebar():
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "Domyślne siatki są zawężone, żeby WFO szybko startowało. Możesz ręcznie rozszerzyć min level do 60, strefy o 0/-5 i 0/+5 oraz EMA 8/10/15/20.",
+                "WFO w BEE4_2 testuje głównie głębokość wejścia H1 oraz klasyczne długości WaveTrend. Filtr H4 bierze progi z pól backtestu ręcznego i wymaga, żeby linie WT były głęboko w strefie oraz zbliżały się do siebie.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -1626,6 +1610,8 @@ def _worker(
     bt_ema_len,
     bt_long_zone,
     bt_short_zone,
+    bt_h4_long,
+    bt_h4_short,
     grid_channel,
     grid_avg,
     grid_signal,
@@ -1694,6 +1680,8 @@ def _worker(
             bt_ema_len,
             bt_long_zone,
             bt_short_zone,
+            bt_h4_long,
+            bt_h4_short,
             fee_rate_val,
             slip_bps_val,
         )
@@ -1973,6 +1961,7 @@ def export_trades(n_clicks, result_data):
     State("inp-bt-htf-filter","value"),
     State("inp-bt-ema-len","value"),
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
+    State("inp-bt-h4-long","value"), State("inp-bt-h4-short","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
@@ -1985,7 +1974,7 @@ def on_run_stop(nr, ns,
     sym, tf, mkt, frm, to, cap,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
-    bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone,
+    bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone):
 
@@ -2010,7 +1999,7 @@ def on_run_stop(nr, ns,
             direction or DEFAULT_PARAMS.get("trade_direction", "both"),
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
-            bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone,
+            bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
         ))
@@ -2470,7 +2459,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
             return dash.no_update, metrics, html.Div([
                 html.Div(ext, style={"display": "flex", "gap": "10px", "flexWrap": "wrap", "marginBottom": "14px"}),
                 mini(side_df, "Long vs Short"),
-                mini(cross_df, "Fresh cross vs Re-entry"),
+                mini(cross_df, "Bullish vs Bearish H1 cross"),
                 mini(yr_df, "Breakdown roczny"),
                 mini(q_df, "Breakdown kwartalny"),
             ])

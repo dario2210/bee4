@@ -53,6 +53,9 @@ class TradeRecord:
     entry_htf_ema200: float = 0.0
     entry_atr: float = 0.0
     entry_stop_price: float = 0.0
+    entry_h4_wt1: float = 0.0
+    entry_h4_wt2: float = 0.0
+    entry_h4_delta: float = 0.0
     exit_wt1: float = 0.0
     exit_wt2: float = 0.0
     exit_delta: float = 0.0
@@ -60,6 +63,9 @@ class TradeRecord:
     exit_signal_level: float = 0.0
     exit_bars: int = 0
     exit_trigger: str = ""
+    exit_h4_wt1: float = 0.0
+    exit_h4_wt2: float = 0.0
+    exit_h4_delta: float = 0.0
 
 
 class Bee4Strategy:
@@ -129,6 +135,9 @@ class Bee4Strategy:
             entry_htf_ema200=em.get("entry_htf_ema200", 0.0),
             entry_atr=em.get("entry_atr", 0.0),
             entry_stop_price=em.get("entry_stop_price", pos.stop_price),
+            entry_h4_wt1=em.get("entry_h4_wt1", 0.0),
+            entry_h4_wt2=em.get("entry_h4_wt2", 0.0),
+            entry_h4_delta=em.get("entry_h4_delta", 0.0),
             exit_wt1=xm.get("exit_wt1", 0.0),
             exit_wt2=xm.get("exit_wt2", 0.0),
             exit_delta=xm.get("exit_delta", 0.0),
@@ -136,6 +145,9 @@ class Bee4Strategy:
             exit_signal_level=xm.get("exit_signal_level", 0.0),
             exit_bars=xm.get("bars_in_position", 0),
             exit_trigger=xm.get("exit_trigger", signal.reason),
+            exit_h4_wt1=xm.get("exit_h4_wt1", 0.0),
+            exit_h4_wt2=xm.get("exit_h4_wt2", 0.0),
+            exit_h4_delta=xm.get("exit_h4_delta", 0.0),
         )
         self.position = None
         return rec, new_capital
@@ -227,6 +239,9 @@ class Bee4Strategy:
             "entry_htf_ema200",
             "entry_atr",
             "entry_stop_price",
+            "entry_h4_wt1",
+            "entry_h4_wt2",
+            "entry_h4_delta",
             "exit_wt1",
             "exit_wt2",
             "exit_delta",
@@ -234,6 +249,9 @@ class Bee4Strategy:
             "exit_signal_level",
             "exit_bars",
             "exit_trigger",
+            "exit_h4_wt1",
+            "exit_h4_wt2",
+            "exit_h4_delta",
         ]
 
         if trades:

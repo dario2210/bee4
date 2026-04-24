@@ -21,6 +21,7 @@ from bee4_params import (
     WT_SIGNAL_LEN_GRID,
     WT_EMA_FILTER_LEN,
     WT_EMA_FILTER_LEN_OPTIONS,
+    WT_H4_FILTER_INTERVAL,
 )
 
 
@@ -34,6 +35,21 @@ def wt2_column(channel_len: int, avg_len: int, signal_len: int) -> str:
 
 def wt_columns(channel_len: int, avg_len: int, signal_len: int) -> tuple[str, str]:
     return wt1_column(channel_len, avg_len), wt2_column(channel_len, avg_len, signal_len)
+
+
+def htf_wt1_column(channel_len: int, avg_len: int, interval: str = WT_H4_FILTER_INTERVAL) -> str:
+    clean_interval = str(interval).replace(" ", "").replace(":", "")
+    return f"wt1_{clean_interval}_c{int(channel_len)}_a{int(avg_len)}"
+
+
+def htf_wt2_column(
+    channel_len: int,
+    avg_len: int,
+    signal_len: int,
+    interval: str = WT_H4_FILTER_INTERVAL,
+) -> str:
+    clean_interval = str(interval).replace(" ", "").replace(":", "")
+    return f"wt2_{clean_interval}_c{int(channel_len)}_a{int(avg_len)}_s{int(signal_len)}"
 
 
 def _bars_since_flag(flag: pd.Series) -> pd.Series:
@@ -86,6 +102,45 @@ def _higher_timeframe_ema(
     ema_htf = resampled.ewm(span=int(ema_len), adjust=False).mean()
     aligned = ema_htf.reindex(times, method="ffill")
     return pd.Series(aligned.to_numpy(), index=df.index, dtype="float64")
+
+
+def _higher_timeframe_ohlcv(df: pd.DataFrame, target_interval: str) -> pd.DataFrame:
+    times = pd.to_datetime(df["time"], utc=True, errors="coerce")
+    base_minutes = _estimate_base_tf_minutes(df)
+    target_minutes = pd.Timedelta(target_interval).total_seconds() / 60.0
+
+    if base_minutes <= 0 or base_minutes >= target_minutes:
+        out = df[["time", "open", "high", "low", "close", "volume"]].copy()
+        out["time"] = times
+        return out.dropna(subset=["time"]).reset_index(drop=True)
+
+    ohlcv = (
+        pd.DataFrame(
+            {
+                "time": times,
+                "open": pd.to_numeric(df["open"], errors="coerce"),
+                "high": pd.to_numeric(df["high"], errors="coerce"),
+                "low": pd.to_numeric(df["low"], errors="coerce"),
+                "close": pd.to_numeric(df["close"], errors="coerce"),
+                "volume": pd.to_numeric(df["volume"], errors="coerce"),
+            }
+        )
+        .dropna(subset=["time"])
+        .set_index("time")
+        .resample(target_interval)
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
+        .dropna(subset=["open", "high", "low", "close"])
+        .reset_index()
+    )
+    return ohlcv
 
 
 def _atr(df: pd.DataFrame, length: int = ATR_LEN) -> pd.Series:
@@ -158,7 +213,25 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
             for signal_len in signal_lens:
                 df[wt2_column(channel_len, avg_len, signal_len)] = wt1.rolling(int(signal_len)).mean()
 
+    h4_df = _higher_timeframe_ohlcv(df, WT_H4_FILTER_INTERVAL)
+    h4_times = pd.to_datetime(df["time"], utc=True, errors="coerce")
+    h4_time_index = pd.to_datetime(h4_df["time"], utc=True, errors="coerce")
+    for channel_len in channel_lens:
+        for avg_len in avg_lens:
+            wt1_h4, _ = compute_wave_trend(h4_df, channel_len, avg_len, signal_lens[0])
+            h4_wt1_col = htf_wt1_column(channel_len, avg_len, WT_H4_FILTER_INTERVAL)
+            wt1_series = pd.Series(wt1_h4.to_numpy(), index=h4_time_index, dtype="float64")
+            df[h4_wt1_col] = wt1_series.reindex(h4_times, method="ffill").to_numpy()
+
+            for signal_len in signal_lens:
+                wt1_h4, wt2_h4 = compute_wave_trend(h4_df, channel_len, avg_len, signal_len)
+                h4_wt2_col = htf_wt2_column(channel_len, avg_len, signal_len, WT_H4_FILTER_INTERVAL)
+                wt2_series = pd.Series(wt2_h4.to_numpy(), index=h4_time_index, dtype="float64")
+                df[h4_wt2_col] = wt2_series.reindex(h4_times, method="ffill").to_numpy()
+
     default_wt1_col, default_wt2_col = wt_columns(WT_CHANNEL_LEN, WT_AVG_LEN, WT_SIGNAL_LEN)
+    default_h4_wt1_col = htf_wt1_column(WT_CHANNEL_LEN, WT_AVG_LEN, WT_H4_FILTER_INTERVAL)
+    default_h4_wt2_col = htf_wt2_column(WT_CHANNEL_LEN, WT_AVG_LEN, WT_SIGNAL_LEN, WT_H4_FILTER_INTERVAL)
     ema_lens = sorted(set([WT_EMA_FILTER_LEN] + list(WT_EMA_FILTER_LEN_OPTIONS)))
     for ema_len in ema_lens:
         df[f"ema_{int(ema_len)}"] = df["close"].ewm(span=int(ema_len), adjust=False).mean()
@@ -169,6 +242,12 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["wt1"] = df[default_wt1_col]
     df["wt2"] = df[default_wt2_col]
     df["wt_delta"] = df["wt1"] - df["wt2"]
+    df["h4_wt1"] = df[default_h4_wt1_col]
+    df["h4_wt2"] = df[default_h4_wt2_col]
+    df["h4_wt_delta"] = df["h4_wt1"] - df["h4_wt2"]
+    df["h4_prev_wt1"] = df["h4_wt1"].shift(1)
+    df["h4_prev_wt2"] = df["h4_wt2"].shift(1)
+    df["h4_prev_wt_delta"] = df["h4_wt_delta"].shift(1)
     df["wt_green_dot"] = (df["wt1"].shift(1) <= df["wt2"].shift(1)) & (df["wt1"] > df["wt2"])
     df["wt_red_dot"] = (df["wt1"].shift(1) >= df["wt2"].shift(1)) & (df["wt1"] < df["wt2"])
     df["bars_since_wt_green_dot"] = _bars_since_flag(df["wt_green_dot"])

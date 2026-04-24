@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 import numpy as np
 
-from bee4_data import wt_columns
+from bee4_data import htf_wt1_column, htf_wt2_column, wt_columns
 from bee4_params import WT_ZERO_LINE
 
 Side = Literal["long", "short"]
@@ -30,6 +30,12 @@ class BarData:
     wt1: float
     wt2: float
     wt_delta: float
+    h4_wt1: float = np.nan
+    h4_wt2: float = np.nan
+    h4_wt_delta: float = np.nan
+    h4_prev_wt1: float = np.nan
+    h4_prev_wt2: float = np.nan
+    h4_prev_wt_delta: float = np.nan
     ema20: float = np.nan
     ema_filter_len: int = 20
     htf_ema200: float = np.nan
@@ -175,6 +181,45 @@ def _direction_flags(params: dict) -> tuple[bool, bool]:
     return allow_longs, allow_shorts
 
 
+def _h4_converging(bar: BarData, side: Side) -> bool:
+    if any(
+        np.isnan(v)
+        for v in [bar.h4_wt1, bar.h4_wt2, bar.h4_wt_delta, bar.h4_prev_wt_delta]
+    ):
+        return False
+
+    current_gap = abs(bar.h4_wt_delta)
+    prev_gap = abs(bar.h4_prev_wt_delta)
+    if current_gap >= prev_gap:
+        return False
+
+    if side == "long":
+        return bar.h4_wt_delta > bar.h4_prev_wt_delta
+    return bar.h4_wt_delta < bar.h4_prev_wt_delta
+
+
+def _h4_filter_ok(bar: BarData, side: Side, params: dict) -> bool:
+    long_filter_max = float(params.get("wt_h4_long_filter_max", -20.0))
+    short_filter_min = float(params.get("wt_h4_short_filter_min", 20.0))
+
+    if side == "long":
+        return (
+            not np.isnan(bar.h4_wt1)
+            and not np.isnan(bar.h4_wt2)
+            and bar.h4_wt1 <= long_filter_max
+            and bar.h4_wt2 <= long_filter_max
+            and _h4_converging(bar, "long")
+        )
+
+    return (
+        not np.isnan(bar.h4_wt1)
+        and not np.isnan(bar.h4_wt2)
+        and bar.h4_wt1 >= short_filter_min
+        and bar.h4_wt2 >= short_filter_min
+        and _h4_converging(bar, "short")
+    )
+
+
 def generate_entry_signal(
     bar: BarData,
     prev_bar: BarData,
@@ -182,12 +227,10 @@ def generate_entry_signal(
     position: Optional[PositionState],
 ) -> Signal:
     """
-    Entry logic:
-      - long on bullish WaveTrend dot/cross when both lines are in the long zone
-      - short on bearish WaveTrend dot/cross when both lines are in the short zone
-      - both sides may re-enter for a few bars after the dot if WaveTrend
-        stays in the selected zone and the EMA filter still agrees
-      - optional minimum distance from zero via wt_min_signal_level
+    Entry logic for BEE4_2:
+      - long immediately on fresh H1 bullish cross in a deep negative H1 zone
+      - short immediately on fresh H1 bearish cross in a deep positive H1 zone
+      - both entries are filtered by H4 WaveTrend zone + convergence
     """
     if position is not None:
         return Signal(action="none")
@@ -200,18 +243,10 @@ def generate_entry_signal(
     level_now = _signal_level(bar)
 
     allow_longs, allow_shorts = _direction_flags(params)
-    long_entry_window_bars = int(params.get("wt_long_entry_window_bars", 0) or 0)
     long_entry_max_above_zero = float(params.get("wt_long_entry_max_above_zero", 0.0))
-    long_require_ema20_reclaim = bool(params.get("wt_long_require_ema20_reclaim", False))
-    long_require_htf_trend = bool(params.get("wt_long_require_htf_trend", False))
-    short_entry_window_bars = int(params.get("wt_short_entry_window_bars", 0) or 0)
     short_entry_min_below_zero = float(params.get("wt_short_entry_min_below_zero", 0.0))
-    short_require_ema20_reject = bool(params.get("wt_short_require_ema20_reject", False))
-    short_require_htf_trend = bool(params.get("wt_short_require_htf_trend", False))
-    long_ema_ok = _ema_filter_ok(bar, "long", long_require_ema20_reclaim)
-    short_ema_ok = _ema_filter_ok(bar, "short", short_require_ema20_reject)
-    long_htf_ok = _htf_trend_ok(bar, "long", long_require_htf_trend)
-    short_htf_ok = _htf_trend_ok(bar, "short", short_require_htf_trend)
+    long_h4_ok = _h4_filter_ok(bar, "long", params)
+    short_h4_ok = _h4_filter_ok(bar, "short", params)
 
     fresh_long_cross = (
         allow_longs
@@ -219,18 +254,7 @@ def generate_entry_signal(
         and bar.wt1 <= long_entry_max_above_zero
         and bar.wt2 <= long_entry_max_above_zero
         and level_now >= min_level
-        and long_ema_ok
-        and long_htf_ok
-    )
-    long_reentry_window = (
-        allow_longs
-        and long_entry_window_bars > 0
-        and _has_recent_signal(bar.bars_since_wt_green_dot, long_entry_window_bars)
-        and bar.wt1 <= long_entry_max_above_zero
-        and bar.wt2 <= long_entry_max_above_zero
-        and level_now >= min_level
-        and long_ema_ok
-        and long_htf_ok
+        and long_h4_ok
     )
     fresh_short_cross = (
         allow_shorts
@@ -238,21 +262,10 @@ def generate_entry_signal(
         and bar.wt1 >= short_entry_min_below_zero
         and bar.wt2 >= short_entry_min_below_zero
         and level_now >= min_level
-        and short_ema_ok
-        and short_htf_ok
+        and short_h4_ok
     )
-    short_reentry_window = (
-        allow_shorts
-        and short_entry_window_bars > 0
-        and _has_recent_signal(bar.bars_since_wt_red_dot, short_entry_window_bars)
-        and bar.wt1 >= short_entry_min_below_zero
-        and bar.wt2 >= short_entry_min_below_zero
-        and level_now >= min_level
-        and short_ema_ok
-        and short_htf_ok
-    )
-    long_cond = fresh_long_cross or long_reentry_window
-    short_cond = fresh_short_cross or short_reentry_window
+    long_cond = fresh_long_cross
+    short_cond = fresh_short_cross
 
     meta = {
         "entry_wt1": round(bar.wt1, 4),
@@ -266,29 +279,30 @@ def generate_entry_signal(
         "entry_ema_filter_len": int(bar.ema_filter_len),
         "entry_htf_ema200": round(bar.htf_ema200, 4) if not np.isnan(bar.htf_ema200) else np.nan,
         "entry_atr": round(bar.atr, 4) if not np.isnan(bar.atr) else np.nan,
+        "entry_h4_wt1": round(bar.h4_wt1, 4) if not np.isnan(bar.h4_wt1) else np.nan,
+        "entry_h4_wt2": round(bar.h4_wt2, 4) if not np.isnan(bar.h4_wt2) else np.nan,
+        "entry_h4_delta": round(bar.h4_wt_delta, 4) if not np.isnan(bar.h4_wt_delta) else np.nan,
     }
 
     if long_cond:
-        long_reason = "WT_GREEN_DOT_BELOW_ZERO" if fresh_long_cross else "WT_LONG_REENTRY_WINDOW"
         return Signal(
             action="open_long",
-            reason=long_reason,
+            reason="WT_H1_GREEN_DOT_H4_FILTER",
             meta={
                 **meta,
-                "cross_type": "bullish" if fresh_long_cross else "bullish_reentry",
+                "cross_type": "bullish",
                 "bars_since_green_dot": round(bar.bars_since_wt_green_dot, 4)
                 if not np.isnan(bar.bars_since_wt_green_dot)
                 else np.nan,
             },
         )
     if short_cond:
-        short_reason = "WT_RED_DOT_ABOVE_ZERO" if fresh_short_cross else "WT_SHORT_REENTRY_WINDOW"
         return Signal(
             action="open_short",
-            reason=short_reason,
+            reason="WT_H1_RED_DOT_H4_FILTER",
             meta={
                 **meta,
-                "cross_type": "bearish" if fresh_short_cross else "bearish_reentry",
+                "cross_type": "bearish",
                 "bars_since_red_dot": round(bar.bars_since_wt_red_dot, 4)
                 if not np.isnan(bar.bars_since_wt_red_dot)
                 else np.nan,
@@ -304,15 +318,12 @@ def generate_exit_signal(
     position: PositionState,
 ) -> Signal:
     """
-    Exit logic:
-      - in bidirectional mode, close/reverse only on the opposite entry signal
-      - in long-only fallback mode, close long on a red WaveTrend turn above zero
-      - in short-only fallback mode, close short on a green WaveTrend turn below zero
-      - optional time stop remains as a safety override when max_bars_in_trade > 0
+    Exit logic for BEE4_2:
+      - no stop-loss / break-even / trailing by default
+      - close or reverse only when the opposite H1 cross + H4 filter appears
     """
     position.bars_in_position += 1
 
-    atr_stop_enabled = bool(params.get("atr_stop_enabled", False))
     max_bars = int(params.get("max_bars_in_trade", 0) or 0)
     zero_line = float(params.get("wt_zero_line", WT_ZERO_LINE))
 
@@ -326,106 +337,45 @@ def generate_exit_signal(
             "bars_in_position": position.bars_in_position,
             "exit_trigger": trigger,
             "stop_price": round(position.stop_price, 4) if not np.isnan(position.stop_price) else np.nan,
+            "exit_h4_wt1": round(bar.h4_wt1, 4) if not np.isnan(bar.h4_wt1) else np.nan,
+            "exit_h4_wt2": round(bar.h4_wt2, 4) if not np.isnan(bar.h4_wt2) else np.nan,
+            "exit_h4_delta": round(bar.h4_wt_delta, 4) if not np.isnan(bar.h4_wt_delta) else np.nan,
         }
-
-    if atr_stop_enabled and not np.isnan(position.stop_price):
-        stop_hit = (
-            (position.side == "long" and bar.low <= position.stop_price)
-            or (position.side == "short" and bar.high >= position.stop_price)
-        )
-        if stop_hit:
-            return Signal(
-                action="close_force",
-                reason="ATR_STOP_LOSS",
-                exit_price=position.stop_price,
-                meta=_meta("ATR_STOP_LOSS"),
-            )
 
     if max_bars > 0 and position.bars_in_position >= max_bars:
         return Signal(action="close_force", reason="TIME_STOP", meta=_meta("TIME_STOP"))
 
-    if atr_stop_enabled and not np.isnan(position.entry_atr):
-        profit_in_atr = (
-            (bar.close - position.entry_price) / position.entry_atr
-            if position.side == "long"
-            else (position.entry_price - bar.close) / position.entry_atr
-        )
-        be_trigger = float(params.get("breakeven_trigger_atr", 0.0) or 0.0)
-        if be_trigger > 0 and profit_in_atr >= be_trigger:
-            if np.isnan(position.stop_price):
-                position.stop_price = position.entry_price
-            elif position.side == "long":
-                position.stop_price = max(position.stop_price, position.entry_price)
-            else:
-                position.stop_price = min(position.stop_price, position.entry_price)
-
-        trail_trigger = float(params.get("trailing_trigger_atr", 0.0) or 0.0)
-        trail_distance = float(params.get("trailing_distance_atr", 1.5) or 1.5)
-        if trail_trigger > 0 and profit_in_atr >= trail_trigger:
-            trail_offset = position.entry_atr * trail_distance
-            if position.side == "long":
-                new_stop = bar.close - trail_offset
-                position.stop_price = max(position.stop_price, new_stop) if not np.isnan(position.stop_price) else new_stop
-            else:
-                new_stop = bar.close + trail_offset
-                position.stop_price = min(position.stop_price, new_stop) if not np.isnan(position.stop_price) else new_stop
-
-    if bool(params.get("wt_exhaustion_exit_enabled", False)):
-        min_exhaustion_level = float(params.get("wt_exhaustion_min_level", 50.0))
-        if position.side == "long" and bar.wt_red_dot and _signal_level(bar) >= min_exhaustion_level:
-            return Signal(
-                action="close_force",
-                reason="WT_EXHAUSTION_EXIT_LONG",
-                meta=_meta("WT_EXHAUSTION_EXIT_LONG"),
-            )
-        if position.side == "short" and bar.wt_green_dot and _signal_level(bar) >= min_exhaustion_level:
-            return Signal(
-                action="close_force",
-                reason="WT_EXHAUSTION_EXIT_SHORT",
-                meta=_meta("WT_EXHAUSTION_EXIT_SHORT"),
-            )
-
     allow_longs, allow_shorts = _direction_flags(params)
-    long_exit_min_level = float(params.get("wt_long_exit_min_level", zero_line))
-    short_exit_max_level = float(params.get("wt_short_exit_max_level", zero_line))
-
-    opposite_signal = generate_entry_signal(bar, prev_bar, params, None)
+    opposite_params = dict(params)
+    opposite_params["allow_longs"] = True
+    opposite_params["allow_shorts"] = True
+    opposite_signal = generate_entry_signal(bar, prev_bar, opposite_params, None)
     if position.side == "long":
-        if allow_shorts and opposite_signal.action == "open_short":
-            return Signal(
-                action="close_reverse",
-                reason="REVERSE_TO_SHORT",
-                meta=_meta("REVERSE_TO_SHORT"),
-            )
-        if (
-            not allow_shorts
-            and bar.wt_red_dot
-            and bar.wt1 > long_exit_min_level
-            and bar.wt2 > long_exit_min_level
-        ):
+        if opposite_signal.action == "open_short":
+            if allow_shorts:
+                return Signal(
+                    action="close_reverse",
+                    reason="REVERSE_TO_SHORT",
+                    meta=_meta("REVERSE_TO_SHORT"),
+                )
             return Signal(
                 action="close_force",
-                reason="WT_RED_DOT_EXIT_LONG",
-                meta=_meta("WT_RED_DOT_EXIT_LONG"),
+                reason="WT_H1_RED_DOT_H4_FILTER_EXIT_LONG",
+                meta=_meta("WT_H1_RED_DOT_H4_FILTER_EXIT_LONG"),
             )
 
     if position.side == "short":
-        if allow_longs and opposite_signal.action == "open_long":
-            return Signal(
-                action="close_reverse",
-                reason="REVERSE_TO_LONG",
-                meta=_meta("REVERSE_TO_LONG"),
-            )
-        if (
-            not allow_longs
-            and bar.wt_green_dot
-            and bar.wt1 < short_exit_max_level
-            and bar.wt2 < short_exit_max_level
-        ):
+        if opposite_signal.action == "open_long":
+            if allow_longs:
+                return Signal(
+                    action="close_reverse",
+                    reason="REVERSE_TO_LONG",
+                    meta=_meta("REVERSE_TO_LONG"),
+                )
             return Signal(
                 action="close_force",
-                reason="WT_GREEN_DOT_EXIT_SHORT",
-                meta=_meta("WT_GREEN_DOT_EXIT_SHORT"),
+                reason="WT_H1_GREEN_DOT_H4_FILTER_EXIT_SHORT",
+                meta=_meta("WT_H1_GREEN_DOT_H4_FILTER_EXIT_SHORT"),
             )
 
     return Signal(action="none")
@@ -458,11 +408,27 @@ def bar_from_row(row, params: dict) -> BarData:
         int(params["wt_avg_len"]),
         int(params["wt_signal_len"]),
     )
+    h4_interval = str(params.get("wt_h4_filter_interval", "4h"))
+    h4_wt1_col = htf_wt1_column(
+        int(params["wt_channel_len"]),
+        int(params["wt_avg_len"]),
+        h4_interval,
+    )
+    h4_wt2_col = htf_wt2_column(
+        int(params["wt_channel_len"]),
+        int(params["wt_avg_len"]),
+        int(params["wt_signal_len"]),
+        h4_interval,
+    )
 
     wt1 = row[wt1_col] if wt1_col in row.index else row.get("wt1", np.nan)
     wt2 = row[wt2_col] if wt2_col in row.index else row.get("wt2", np.nan)
     wt1 = float(wt1) if not np.isnan(wt1) else np.nan
     wt2 = float(wt2) if not np.isnan(wt2) else np.nan
+    h4_wt1 = row[h4_wt1_col] if h4_wt1_col in row.index else row.get("h4_wt1", np.nan)
+    h4_wt2 = row[h4_wt2_col] if h4_wt2_col in row.index else row.get("h4_wt2", np.nan)
+    h4_wt1 = float(h4_wt1) if not np.isnan(h4_wt1) else np.nan
+    h4_wt2 = float(h4_wt2) if not np.isnan(h4_wt2) else np.nan
     bars_since_wt_green_dot = row.get("bars_since_wt_green_dot", np.nan)
     bars_since_wt_red_dot = row.get("bars_since_wt_red_dot", np.nan)
     ema_filter_len = int(params.get("wt_ema_filter_len", 20) or 20)
@@ -478,6 +444,12 @@ def bar_from_row(row, params: dict) -> BarData:
         wt1=wt1,
         wt2=wt2,
         wt_delta=float(wt1 - wt2) if not np.isnan(wt1) and not np.isnan(wt2) else np.nan,
+        h4_wt1=h4_wt1,
+        h4_wt2=h4_wt2,
+        h4_wt_delta=float(h4_wt1 - h4_wt2) if not np.isnan(h4_wt1) and not np.isnan(h4_wt2) else np.nan,
+        h4_prev_wt1=_float_or_nan(row.get("h4_prev_wt1", np.nan)),
+        h4_prev_wt2=_float_or_nan(row.get("h4_prev_wt2", np.nan)),
+        h4_prev_wt_delta=_float_or_nan(row.get("h4_prev_wt_delta", np.nan)),
         ema20=_float_or_nan(ema_filter_value),
         ema_filter_len=ema_filter_len,
         htf_ema200=_float_or_nan(row.get("htf_ema200", np.nan)),
