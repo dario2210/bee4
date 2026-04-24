@@ -24,6 +24,8 @@ from bee4_params import (
     WT_EMA_FILTER_LEN_OPTIONS,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
+    WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
+    WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
 )
 from bee4_data     import load_klines, prepare_indicators
 from bee4_strategy import Bee4Strategy
@@ -185,6 +187,7 @@ def _strategy_params_from_controls(
             "wt_h4_short_filter_min": float(
                 h4_short_filter if h4_short_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_short_filter_min"]
             ),
+            "wt_h4_invalidation_exit_enabled": True,
             "atr_stop_enabled": False,
             "breakeven_trigger_atr": 0.0,
             "trailing_trigger_atr": 0.0,
@@ -208,6 +211,8 @@ def _grid_overrides_from_controls(
     ema_len_grid,
     long_zone_grid,
     short_zone_grid,
+    h4_long_filter_grid,
+    h4_short_filter_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -226,6 +231,16 @@ def _grid_overrides_from_controls(
         "wt_short_entry_min_below_zero": _clean_selected_values(
             short_zone_grid,
             WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
+            float,
+        ),
+        "wt_h4_long_filter_max": _clean_selected_values(
+            h4_long_filter_grid,
+            WT_H4_LONG_FILTER_MAX_GRID,
+            float,
+        ),
+        "wt_h4_short_filter_min": _clean_selected_values(
+            h4_short_filter_grid,
+            WT_H4_SHORT_FILTER_MIN_GRID,
             float,
         ),
     }
@@ -247,6 +262,7 @@ PARAM_SUMMARY_ORDER = [
     "wt_short_entry_min_below_zero",
     "wt_h4_long_filter_max",
     "wt_h4_short_filter_min",
+    "wt_h4_invalidation_exit_enabled",
     "fee_rate",
     "slippage_bps",
 ]
@@ -260,6 +276,7 @@ PARAM_SUMMARY_LABELS = {
     "wt_short_entry_min_below_zero": "Short zone H1",
     "wt_h4_long_filter_max": "Long filter H4",
     "wt_h4_short_filter_min": "Short filter H4",
+    "wt_h4_invalidation_exit_enabled": "H4 emergency exit",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -1282,7 +1299,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_2: wejście jest od razu na świeżej kropce H1 w głębokiej strefie WT, a filtr robią dwie linie WaveTrend z H4. Stop loss, re-entry i filtry EMA są w tej gałęzi wyłączone.",
+                "BEE4_2: wejście jest od razu na świeżej kropce H1 w głębokiej strefie WT, a filtr robią dwie linie WaveTrend z H4. Stop loss, re-entry i filtry EMA są wyłączone, a awaryjny exit zamyka pozycję gdy H4 zaczyna przeczyć setupowi.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -1368,8 +1385,20 @@ def sidebar():
                 value=WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Long filter H4"),
+            dcc.Checklist(id="chk-grid-h4-long",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_FILTER_MAX_OPTIONS],
+                value=WT_H4_LONG_FILTER_MAX_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Short filter H4"),
+            dcc.Checklist(id="chk-grid-h4-short",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_SHORT_FILTER_MIN_OPTIONS],
+                value=WT_H4_SHORT_FILTER_MIN_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "WFO w BEE4_2 testuje głównie głębokość wejścia H1 oraz klasyczne długości WaveTrend. Filtr H4 bierze progi z pól backtestu ręcznego i wymaga, żeby linie WT były głęboko w strefie oraz zbliżały się do siebie.",
+                "WFO w BEE4_2 testuje głębokość wejścia H1, osobne progi H4 dla long/short oraz klasyczne długości WaveTrend. Awaryjny exit H4 jest stały i włączony.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -1622,6 +1651,8 @@ def _worker(
     grid_ema_len,
     grid_long_zone,
     grid_short_zone,
+    grid_h4_long,
+    grid_h4_short,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -1736,6 +1767,8 @@ def _worker(
             grid_ema_len,
             grid_long_zone,
             grid_short_zone,
+            grid_h4_long,
+            grid_h4_short,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -1968,6 +2001,7 @@ def export_trades(n_clicks, result_data):
     State("chk-grid-htf-filter","value"),
     State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
+    State("chk-grid-h4-long","value"), State("chk-grid-h4-short","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -1976,7 +2010,8 @@ def on_run_stop(nr, ns,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
     grid_channel, grid_avg, grid_signal, grid_min_level,
-    grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone):
+    grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
+    grid_h4_long, grid_h4_short):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -2002,6 +2037,7 @@ def on_run_stop(nr, ns,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
+            grid_h4_long, grid_h4_short,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

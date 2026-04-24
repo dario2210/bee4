@@ -36,7 +36,9 @@ from bee4_params import (
     WT_SIGNAL_LEN_GRID,
     WT_REENTRY_WINDOW_GRID,
     WT_H4_LONG_FILTER_MAX,
+    WT_H4_LONG_FILTER_MAX_GRID,
     WT_H4_SHORT_FILTER_MIN,
+    WT_H4_SHORT_FILTER_MIN_GRID,
     WT_SHORT_REQUIRE_HTF_TREND,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
@@ -144,6 +146,16 @@ def walk_forward_optimization(
         WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
         float,
     )
+    h4_long_filter_grid = _clean_grid(
+        grid_overrides.get("wt_h4_long_filter_max"),
+        WT_H4_LONG_FILTER_MAX_GRID,
+        float,
+    )
+    h4_short_filter_grid = _clean_grid(
+        grid_overrides.get("wt_h4_short_filter_min"),
+        WT_H4_SHORT_FILTER_MIN_GRID,
+        float,
+    )
 
     n = len(df)
     start = 0
@@ -167,7 +179,9 @@ def walk_forward_optimization(
         * len(htf_filter_grid)
         * len(ema_len_grid)
         * len(long_zone_grid)
-        * len(short_zone_grid),
+        * len(short_zone_grid)
+        * len(h4_long_filter_grid)
+        * len(h4_short_filter_grid),
     )
     combo_progress_step = max(1, combo_total // 20)
     if verbose:
@@ -222,6 +236,8 @@ def walk_forward_optimization(
             wt_ema_filter_len,
             wt_long_entry_max_above_zero,
             wt_short_entry_min_below_zero,
+            wt_h4_long_filter_max,
+            wt_h4_short_filter_min,
         ) in product(
             channel_grid,
             avg_grid,
@@ -233,6 +249,8 @@ def walk_forward_optimization(
             ema_len_grid,
             long_zone_grid,
             short_zone_grid,
+            h4_long_filter_grid,
+            h4_short_filter_grid,
         ):
             if should_stop is not None and should_stop():
                 stopped = True
@@ -262,6 +280,8 @@ def walk_forward_optimization(
                     "wt_ema_filter_len": int(wt_ema_filter_len),
                     "wt_long_entry_max_above_zero": wt_long_entry_max_above_zero,
                     "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
+                    "wt_h4_long_filter_max": wt_h4_long_filter_max,
+                    "wt_h4_short_filter_min": wt_h4_short_filter_min,
                 }
             )
             strat = Bee4Strategy(params, fee_rate=fee_rate)

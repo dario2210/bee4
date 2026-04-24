@@ -56,7 +56,8 @@ BASE_PARAMS = {
     "wt_ema_filter_len": 20,
     "wt_h4_filter_interval": "4h",
     "wt_h4_long_filter_max": -20.0,
-    "wt_h4_short_filter_min": 20.0,
+    "wt_h4_short_filter_min": 50.0,
+    "wt_h4_invalidation_exit_enabled": True,
     "atr_stop_enabled": False,
     "atr_stop_multiplier": 2.0,
     "breakeven_trigger_atr": 0.0,
@@ -141,8 +142,8 @@ def _signal_df() -> pd.DataFrame:
     closes = [1800.0, 1810.0, 1830.0, 1820.0]
     wt1_vals = [-48.0, -34.0, 44.0, 34.0]
     wt2_vals = [-42.0, -44.0, 36.0, 44.0]
-    h4_wt1_vals = [-34.0, -28.0, 32.0, 28.0]
-    h4_wt2_vals = [-22.0, -22.0, 20.0, 22.0]
+    h4_wt1_vals = [-34.0, -28.0, 62.0, 58.0]
+    h4_wt2_vals = [-22.0, -22.0, 50.0, 52.0]
 
     df = pd.DataFrame(
         {
@@ -269,18 +270,18 @@ class TestEntrySignals:
         prev = _make_bar(
             wt1=48.0,
             wt2=42.0,
-            h4_wt1=34.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=42.0,
-            h4_prev_wt2=22.0,
+            h4_wt1=66.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=74.0,
+            h4_prev_wt2=52.0,
         )
         bar = _make_bar(
-            wt1=34.0,
-            wt2=44.0,
-            h4_wt1=28.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=34.0,
-            h4_prev_wt2=22.0,
+            wt1=54.0,
+            wt2=64.0,
+            h4_wt1=58.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=66.0,
+            h4_prev_wt2=52.0,
         )
 
         sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
@@ -292,18 +293,18 @@ class TestEntrySignals:
         prev = _make_bar(
             wt1=48.0,
             wt2=42.0,
-            h4_wt1=34.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=42.0,
-            h4_prev_wt2=22.0,
+            h4_wt1=66.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=74.0,
+            h4_prev_wt2=52.0,
         )
         bar = _make_bar(
-            wt1=34.0,
-            wt2=44.0,
-            h4_wt1=28.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=34.0,
-            h4_prev_wt2=22.0,
+            wt1=54.0,
+            wt2=64.0,
+            h4_wt1=58.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=66.0,
+            h4_prev_wt2=52.0,
         )
 
         sig = generate_entry_signal(bar, prev, LONG_ONLY_PARAMS, None)
@@ -316,18 +317,18 @@ class TestExitSignals:
         prev = _make_bar(
             wt1=48.0,
             wt2=42.0,
-            h4_wt1=34.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=42.0,
-            h4_prev_wt2=22.0,
+            h4_wt1=66.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=74.0,
+            h4_prev_wt2=52.0,
         )
         bar = _make_bar(
-            wt1=34.0,
-            wt2=44.0,
-            h4_wt1=28.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=34.0,
-            h4_prev_wt2=22.0,
+            wt1=54.0,
+            wt2=64.0,
+            h4_wt1=58.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=66.0,
+            h4_prev_wt2=52.0,
         )
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
 
@@ -340,18 +341,18 @@ class TestExitSignals:
         prev = _make_bar(
             wt1=48.0,
             wt2=42.0,
-            h4_wt1=34.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=42.0,
-            h4_prev_wt2=22.0,
+            h4_wt1=66.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=74.0,
+            h4_prev_wt2=52.0,
         )
         bar = _make_bar(
-            wt1=34.0,
-            wt2=44.0,
-            h4_wt1=28.0,
-            h4_wt2=22.0,
-            h4_prev_wt1=34.0,
-            h4_prev_wt2=22.0,
+            wt1=54.0,
+            wt2=64.0,
+            h4_wt1=58.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=66.0,
+            h4_prev_wt2=52.0,
         )
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
 
@@ -359,6 +360,54 @@ class TestExitSignals:
 
         assert sig.action == "close_force"
         assert sig.reason == "WT_H1_RED_DOT_H4_FILTER_EXIT_LONG"
+
+    def test_emergency_exit_long_when_h4_turns_against_position(self):
+        prev = _make_bar(
+            wt1=-35.0,
+            wt2=-42.0,
+            h4_wt1=-28.0,
+            h4_wt2=-22.0,
+            h4_prev_wt1=-24.0,
+            h4_prev_wt2=-22.0,
+        )
+        bar = _make_bar(
+            wt1=-32.0,
+            wt2=-40.0,
+            h4_wt1=-34.0,
+            h4_wt2=-22.0,
+            h4_prev_wt1=-28.0,
+            h4_prev_wt2=-22.0,
+        )
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "H4_LONG_INVALIDATION_EXIT"
+
+    def test_emergency_exit_short_when_h4_turns_against_position(self):
+        prev = _make_bar(
+            wt1=64.0,
+            wt2=54.0,
+            h4_wt1=58.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=54.0,
+            h4_prev_wt2=52.0,
+        )
+        bar = _make_bar(
+            wt1=60.0,
+            wt2=55.0,
+            h4_wt1=66.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=58.0,
+            h4_prev_wt2=52.0,
+        )
+        pos = PositionState(side="short", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "H4_SHORT_INVALIDATION_EXIT"
 
 
 class TestBarHelpers:
@@ -456,7 +505,7 @@ class TestWFOHelpers:
                 "best_wt_long_entry_max_above_zero": [-30.0, -30.0, -40.0],
                 "best_wt_short_entry_min_below_zero": [30.0, 30.0, 40.0],
                 "best_wt_h4_long_filter_max": [-20.0, -20.0, -30.0],
-                "best_wt_h4_short_filter_min": [20.0, 20.0, 30.0],
+                "best_wt_h4_short_filter_min": [50.0, 50.0, 60.0],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
                 "n_trades_live": [2, 1, 1],
@@ -474,7 +523,7 @@ class TestWFOHelpers:
         assert best["wt_long_entry_max_above_zero"] == pytest.approx(-30.0)
         assert best["wt_short_entry_min_below_zero"] == pytest.approx(30.0)
         assert best["wt_h4_long_filter_max"] == pytest.approx(-20.0)
-        assert best["wt_h4_short_filter_min"] == pytest.approx(20.0)
+        assert best["wt_h4_short_filter_min"] == pytest.approx(50.0)
 
     def test_wfo_accepts_bee4_2_grid_overrides(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
@@ -503,6 +552,8 @@ class TestWFOHelpers:
             "wt_ema_filter_len": [20],
             "wt_long_entry_max_above_zero": [-30.0],
             "wt_short_entry_min_below_zero": [30.0],
+            "wt_h4_long_filter_max": [-20.0],
+            "wt_h4_short_filter_min": [50.0],
         }
 
         _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
@@ -525,7 +576,7 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_long_entry_max_above_zero"]) == {-30.0}
         assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {30.0}
         assert set(windows_df["best_wt_h4_long_filter_max"]) == {-20.0}
-        assert set(windows_df["best_wt_h4_short_filter_min"]) == {20.0}
+        assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
 
     def test_wfo_can_stop_during_first_window(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")

@@ -220,6 +220,26 @@ def _h4_filter_ok(bar: BarData, side: Side, params: dict) -> bool:
     )
 
 
+def _h4_invalidated(bar: BarData, side: Side, params: dict) -> bool:
+    if not bool(params.get("wt_h4_invalidation_exit_enabled", True)):
+        return False
+    if any(
+        np.isnan(v)
+        for v in [bar.h4_wt1, bar.h4_wt2, bar.h4_wt_delta, bar.h4_prev_wt1, bar.h4_prev_wt_delta]
+    ):
+        return False
+
+    wt1_slope = bar.h4_wt1 - bar.h4_prev_wt1
+    gap_widening = abs(bar.h4_wt_delta) > abs(bar.h4_prev_wt_delta)
+
+    if side == "long":
+        bearish_spread_widens = bar.h4_wt_delta < 0.0 and gap_widening
+        return wt1_slope < 0.0 or bearish_spread_widens
+
+    bullish_spread_widens = bar.h4_wt_delta > 0.0 and gap_widening
+    return wt1_slope > 0.0 or bullish_spread_widens
+
+
 def generate_entry_signal(
     bar: BarData,
     prev_bar: BarData,
@@ -320,6 +340,7 @@ def generate_exit_signal(
     """
     Exit logic for BEE4_2:
       - no stop-loss / break-even / trailing by default
+      - emergency close if the H4 WaveTrend setup is invalidated
       - close or reverse only when the opposite H1 cross + H4 filter appears
     """
     position.bars_in_position += 1
@@ -377,6 +398,20 @@ def generate_exit_signal(
                 reason="WT_H1_GREEN_DOT_H4_FILTER_EXIT_SHORT",
                 meta=_meta("WT_H1_GREEN_DOT_H4_FILTER_EXIT_SHORT"),
             )
+
+    if position.side == "long" and _h4_invalidated(bar, "long", params):
+        return Signal(
+            action="close_force",
+            reason="H4_LONG_INVALIDATION_EXIT",
+            meta=_meta("H4_LONG_INVALIDATION_EXIT"),
+        )
+
+    if position.side == "short" and _h4_invalidated(bar, "short", params):
+        return Signal(
+            action="close_force",
+            reason="H4_SHORT_INVALIDATION_EXIT",
+            meta=_meta("H4_SHORT_INVALIDATION_EXIT"),
+        )
 
     return Signal(action="none")
 
