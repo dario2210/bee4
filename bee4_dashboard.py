@@ -2,7 +2,7 @@
 bee4_dashboard.py  –  Bee4 WaveTrend Dashboard  http://IP:8064
 """
 from __future__ import annotations
-import argparse, json, os, threading
+import argparse, datetime as _dt, io, json, os, threading
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -27,7 +27,13 @@ from bee4_params import (
     WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
 )
-from bee4_data     import load_klines, prepare_indicators
+from bee4_data     import (
+    htf_wt1_column,
+    htf_wt2_column,
+    load_klines,
+    prepare_indicators,
+    wt_columns,
+)
 from bee4_strategy import Bee4Strategy
 from bee4_wfo      import get_latest_best_params, walk_forward_optimization
 from bee4_stats    import (
@@ -60,6 +66,7 @@ _state  = {"running": False, "stop": False, "status": "", "progress": "",
            "result": None, "result_version": 0}
 _chart_df_cache: dict = {}   # (symbol, tf) → df z wskaźnikami
 _APP_DIR = Path(__file__).resolve().parent
+_SAVED_RUNS_DIR = _APP_DIR / "results" / "saved_runs"
 
 def gs():
     with _lock: return dict(_state)
@@ -109,6 +116,109 @@ def btn(id_, label, color=C["blue"], text="#fff"):
         "width":"100%","background":color,"border":"none","borderRadius":"16px",
         "color":text,"padding":"12px 14px","fontSize":"13px","fontWeight":"700",
         "cursor":"pointer","marginBottom":"8px"})
+
+
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
+        return value.isoformat()
+    if isinstance(value, np.ndarray):
+        return [_json_safe(v) for v in value.tolist()]
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return value
+
+
+def _safe_slug(value, fallback="run") -> str:
+    text = str(value or fallback).strip()
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in text)
+    cleaned = "-".join(part for part in cleaned.split("-") if part)
+    return cleaned or fallback
+
+
+def _saved_result_filename(result_data: dict) -> str:
+    stats = result_data.get("stats", {}) if isinstance(result_data, dict) else {}
+    mode = _safe_slug(str(result_data.get("mode", "run")).lower() if isinstance(result_data, dict) else "run")
+    symbol = _safe_slug(str(result_data.get("symbol", "asset")).upper() if isinstance(result_data, dict) else "asset")
+    tf = _safe_slug(str(result_data.get("tf", "tf")).lower() if isinstance(result_data, dict) else "tf")
+    ret = float(stats.get("net_return_pct", 0.0) or 0.0)
+    ret_token = ("p" if ret >= 0 else "m") + f"{abs(ret):.2f}".replace(".", "p")
+    n_trades = int(float(stats.get("n_trades", len(result_data.get("trades", []))) or 0))
+    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    return f"bee4_{stamp}_{mode}_{symbol}_{tf}_{ret_token}pct_tr{n_trades}.json"
+
+
+def _saved_result_path(filename: str) -> Path:
+    safe_name = Path(str(filename or "")).name
+    if not safe_name.endswith(".json"):
+        raise ValueError("Nieprawidłowy plik wyniku.")
+    path = (_SAVED_RUNS_DIR / safe_name).resolve()
+    root = _SAVED_RUNS_DIR.resolve()
+    if root not in path.parents:
+        raise ValueError("Plik musi znajdować się w katalogu zapisanych wyników.")
+    return path
+
+
+def _save_result_file(result_data: dict) -> str:
+    if not result_data:
+        raise ValueError("Brak wyniku do zapisu.")
+    _SAVED_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    filename = _saved_result_filename(result_data)
+    payload = {
+        "schema": "bee4_dashboard_result_v1",
+        "saved_at": pd.Timestamp.utcnow().isoformat(),
+        "meta": {
+            "mode": result_data.get("mode"),
+            "symbol": result_data.get("symbol"),
+            "tf": result_data.get("tf"),
+            "capital": result_data.get("capital"),
+            "stats": _json_safe(result_data.get("stats", {})),
+        },
+        "result": _json_safe(result_data),
+    }
+    path = _saved_result_path(filename)
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2, allow_nan=False)
+    return filename
+
+
+def _load_result_file(filename: str) -> dict:
+    path = _saved_result_path(filename)
+    with path.open("r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+    result = payload.get("result", payload) if isinstance(payload, dict) else {}
+    if not isinstance(result, dict):
+        raise ValueError("Plik nie zawiera wyniku dashboardu.")
+    result["_loaded_from_file"] = path.name
+    return result
+
+
+def _saved_result_options(limit: int = 100) -> list[dict[str, str]]:
+    if not _SAVED_RUNS_DIR.exists():
+        return []
+    files = sorted(
+        _SAVED_RUNS_DIR.glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    options = []
+    for path in files:
+        mtime = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC").tz_convert("Europe/Warsaw")
+        label = f"{mtime.strftime('%Y-%m-%d %H:%M')} | {path.stem}"
+        options.append({"label": label, "value": path.name})
+    return options
 
 
 def _parse_bool_value(value, default=False) -> bool:
@@ -454,6 +564,410 @@ def fig_fee(fd):
     fig.update_yaxes(title_text="Fee USD",secondary_y=True,gridcolor="rgba(0,0,0,0)")
     return fig
 
+
+def _direction_stats_df(trades_df: pd.DataFrame) -> pd.DataFrame:
+    if trades_df is None or trades_df.empty or "side" not in trades_df.columns or "pnl" not in trades_df.columns:
+        return pd.DataFrame(
+            [
+                {"side": side, "trades": 0, "wins": 0, "losses": 0, "win_pnl_usd": 0.0, "loss_pnl_usd": 0.0, "net_pnl_usd": 0.0}
+                for side in ("long", "short")
+            ]
+        )
+
+    df = trades_df.copy()
+    df["side"] = df["side"].astype(str).str.lower()
+    df["pnl"] = pd.to_numeric(df["pnl"], errors="coerce").fillna(0.0)
+    records = []
+    for side in ("long", "short"):
+        sub = df[df["side"] == side]
+        wins = sub[sub["pnl"] > 0]
+        losses = sub[sub["pnl"] <= 0]
+        records.append(
+            {
+                "side": side,
+                "trades": int(len(sub)),
+                "wins": int(len(wins)),
+                "losses": int(len(losses)),
+                "win_pnl_usd": float(wins["pnl"].sum()),
+                "loss_pnl_usd": float(losses["pnl"].sum()),
+                "net_pnl_usd": float(sub["pnl"].sum()),
+            }
+        )
+    return pd.DataFrame(records)
+
+
+def _direction_stats_from_result(result_data: dict | None) -> pd.DataFrame:
+    if not result_data:
+        return _direction_stats_df(pd.DataFrame())
+    return _direction_stats_df(pd.DataFrame(result_data.get("trades", [])))
+
+
+def _direction_row(direction_df: pd.DataFrame, side: str) -> dict:
+    if direction_df is None or direction_df.empty:
+        return {"side": side, "trades": 0, "wins": 0, "losses": 0, "win_pnl_usd": 0.0, "loss_pnl_usd": 0.0, "net_pnl_usd": 0.0}
+    rows = direction_df[direction_df["side"] == side]
+    if rows.empty:
+        return {"side": side, "trades": 0, "wins": 0, "losses": 0, "win_pnl_usd": 0.0, "loss_pnl_usd": 0.0, "net_pnl_usd": 0.0}
+    return rows.iloc[0].to_dict()
+
+
+def _money(value) -> str:
+    value = float(value or 0.0)
+    sign = "+" if value > 0 else ""
+    return f"${sign}{value:,.0f}"
+
+
+def fig_report_price_wt(result_data: dict) -> go.Figure:
+    symbol = str(result_data.get("symbol", ""))
+    tf = str(result_data.get("tf", ""))
+    params = result_data.get("best_params") or result_data.get("params_used") or DEFAULT_PARAMS
+    trades_df = pd.DataFrame(result_data.get("trades", []))
+    windows_df = pd.DataFrame(result_data.get("windows_df", []))
+    payload = lightweight_chart_payload(symbol, tf, trades_df, windows_df=windows_df, params=params)
+
+    candles = pd.DataFrame(payload.get("candles", []))
+    if candles.empty:
+        return go.Figure(layout=PT)
+    candles["dt"] = pd.to_datetime(candles["time"], unit="s", utc=True, errors="coerce")
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.5, 0.5], vertical_spacing=0.04)
+    fig.add_trace(
+        go.Candlestick(
+            x=candles["dt"],
+            open=candles["open"],
+            high=candles["high"],
+            low=candles["low"],
+            close=candles["close"],
+            name="OHLC",
+            increasing={"line": {"color": C["green"], "width": 1}, "fillcolor": C["green"]},
+            decreasing={"line": {"color": C["coral"], "width": 1}, "fillcolor": C["coral"]},
+        ),
+        row=1,
+        col=1,
+    )
+
+    for line in payload.get("lines", []):
+        data = pd.DataFrame(line.get("data", []))
+        if data.empty:
+            continue
+        data["dt"] = pd.to_datetime(data["time"], unit="s", utc=True, errors="coerce")
+        fig.add_trace(
+            go.Scatter(
+                x=data["dt"],
+                y=data["value"],
+                mode="lines",
+                name=line.get("label", line.get("id")),
+                line={"color": line.get("color"), "width": line.get("lineWidth", 2)},
+            ),
+            row=1,
+            col=1,
+        )
+
+    if not trades_df.empty:
+        tdf = _normalize_chart_trades(trades_df)
+        for side, color, symbol_marker, name in [
+            ("long", C["green"], "triangle-up", "Long IN"),
+            ("short", C["red"], "triangle-down", "Short IN"),
+        ]:
+            sub = tdf[tdf["side"] == side] if "side" in tdf.columns else pd.DataFrame()
+            if sub.empty:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=sub["entry_time"],
+                    y=sub["entry_price"],
+                    mode="markers",
+                    name=name,
+                    marker={"symbol": symbol_marker, "size": 8, "color": color, "line": {"width": 0.5, "color": "#ffffff"}},
+                ),
+                row=1,
+                col=1,
+            )
+
+    signal_lookup = {}
+    for line in payload.get("signalLines", []):
+        data = pd.DataFrame(line.get("data", []))
+        if data.empty:
+            continue
+        data["dt"] = pd.to_datetime(data["time"], unit="s", utc=True, errors="coerce")
+        dash_style = "dot" if int(line.get("lineStyle", 0) or 0) == 2 else "solid"
+        fig.add_trace(
+            go.Scatter(
+                x=data["dt"],
+                y=data["value"],
+                mode="lines",
+                name=line.get("label", line.get("id")),
+                line={"color": line.get("color"), "width": line.get("lineWidth", 2), "dash": dash_style},
+            ),
+            row=2,
+            col=1,
+        )
+        signal_lookup[line.get("id")] = dict(zip(data["time"], data["value"]))
+
+    marker_groups: dict[str, list[dict[str, object]]] = {}
+    for marker in payload.get("signalMarkers", []):
+        sid = marker.get("seriesId")
+        value = signal_lookup.get(sid, {}).get(marker.get("time"))
+        if value is None:
+            continue
+        label = str(marker.get("text", "cross"))
+        marker_groups.setdefault(label, []).append(
+            {
+                "time": pd.to_datetime(marker.get("time"), unit="s", utc=True, errors="coerce"),
+                "value": value,
+                "color": marker.get("color", C["blue"]),
+            }
+        )
+    for label, records in marker_groups.items():
+        marker_df = pd.DataFrame(records)
+        fig.add_trace(
+            go.Scatter(
+                x=marker_df["time"],
+                y=marker_df["value"],
+                mode="markers",
+                name=label,
+                marker={"size": 6, "color": marker_df["color"], "symbol": "circle"},
+            ),
+            row=2,
+            col=1,
+        )
+
+    for yv, color in [
+        (TMA_LOW_MIN, "rgba(34, 211, 170, 0.35)"),
+        (TMA_LOW_MAX, "rgba(34, 211, 170, 0.35)"),
+        (0.0, "rgba(149, 166, 188, 0.40)"),
+        (TMA_HIGH_MIN, "rgba(255, 93, 115, 0.35)"),
+        (TMA_HIGH_MAX, "rgba(255, 93, 115, 0.35)"),
+    ]:
+        fig.add_hline(y=yv, line_dash="dot", line_color=color, line_width=1, row=2, col=1)
+
+    fig.update_layout(
+        **PT,
+        height=720,
+        title=f"{symbol.upper()} {tf} | Cena + WaveTrend H1/H4",
+        showlegend=True,
+        xaxis_rangeslider_visible=False,
+        legend={"orientation": "h", "y": -0.12, "x": 0, "font": {"size": 9, "color": C["text"]}},
+    )
+    fig.update_yaxes(title_text="Cena", row=1, col=1, gridcolor=C["border"])
+    fig.update_yaxes(title_text="WT", row=2, col=1, gridcolor=C["border"])
+    return fig
+
+
+def _report_filename(result_data: dict) -> str:
+    mode = _safe_slug(str(result_data.get("mode", "run")).lower())
+    symbol = _safe_slug(str(result_data.get("symbol", "asset")).upper())
+    tf = _safe_slug(str(result_data.get("tf", "tf")).lower())
+    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    return f"bee4_{mode}_{symbol}_{tf}_report_{stamp}.pdf"
+
+
+def _report_value(value, decimals: int = 2) -> str:
+    if value is None:
+        return "n/d"
+    try:
+        if pd.isna(value):
+            return "n/d"
+    except Exception:
+        pass
+    if isinstance(value, (bool, np.bool_)):
+        return "true" if bool(value) else "false"
+    if isinstance(value, (int, np.integer)):
+        return f"{int(value):,}"
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):,.{decimals}f}"
+    return str(value)
+
+
+def _report_summary_rows(result_data: dict) -> list[list[str]]:
+    stats = result_data.get("stats", {})
+    capital = result_data.get("capital", INITIAL_CAPITAL)
+    consistency = _report_value(stats.get("consistency_pct"), 0)
+    consistency = f"{consistency}%" if consistency != "n/d" else consistency
+    return [
+        ["Tryb", str(result_data.get("mode", "n/d")).upper()],
+        ["Symbol / TF", f"{str(result_data.get('symbol', '')).upper()} {result_data.get('tf', '')}"],
+        ["Kapital startowy", _money(capital)],
+        ["Kapital koncowy", _money(stats.get("final_capital", capital))],
+        ["Net zwrot", f"{float(stats.get('net_return_pct', 0.0) or 0.0):+.2f}%"],
+        ["Net PnL", _money(stats.get("net_profit_usd", 0.0))],
+        ["Max DD", f"{float(stats.get('max_drawdown_pct', 0.0) or 0.0):.2f}%"],
+        ["CAGR", f"{float(stats.get('cagr_pct', 0.0) or 0.0):.2f}%"],
+        ["Transakcje", _report_value(stats.get("n_trades", 0), 0)],
+        ["Winrate", f"{float(stats.get('winrate_pct', 0.0) or 0.0):.2f}%"],
+        ["Profit Factor", _report_value(stats.get("profit_factor"))],
+        ["Expectancy / trade", _money(stats.get("expectancy_usd", 0.0))],
+        ["Return / Drawdown", _report_value(stats.get("return_drawdown_ratio"))],
+        ["Sharpe / Sortino", f"{_report_value(stats.get('sharpe_ratio'))} / {_report_value(stats.get('sortino_ratio'))}"],
+        ["R:R avg", _report_value(stats.get("risk_reward_ratio"))],
+        ["Consistency / Stability", f"{consistency} / {_report_value(stats.get('stability_score'))}"],
+        ["Oplaty", f"{_money(stats.get('fee_total_usd', 0.0))} ({_report_value(stats.get('fee_total_pct', 0.0))}%)"],
+    ]
+
+
+def _df_for_report_table(df: pd.DataFrame, max_rows: int = 80) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy().head(max_rows)
+    for col in out.columns:
+        if pd.api.types.is_datetime64_any_dtype(out[col]):
+            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
+        elif pd.api.types.is_numeric_dtype(out[col]):
+            out[col] = out[col].map(lambda v: "" if pd.isna(v) else round(float(v), 4))
+    return out.fillna("")
+
+
+def _table_flowables(title: str, df: pd.DataFrame, styles, table_style, max_cols: int = 7, max_rows: int = 80) -> list:
+    from reportlab.platypus import Paragraph, Spacer, Table
+
+    if df is None or df.empty:
+        return [Paragraph(title, styles["Heading2"]), Paragraph("Brak danych.", styles["Muted"]), Spacer(1, 8)]
+
+    df2 = _df_for_report_table(df, max_rows=max_rows)
+    flowables = [Paragraph(title, styles["Heading2"])]
+    columns = list(df2.columns)
+    for start in range(0, len(columns), max_cols):
+        chunk_cols = columns[start:start + max_cols]
+        data = [chunk_cols] + df2[chunk_cols].astype(str).values.tolist()
+        flowables.append(Table(data, repeatRows=1, style=table_style, hAlign="LEFT"))
+        flowables.append(Spacer(1, 8))
+    if len(df) > max_rows:
+        flowables.append(Paragraph(f"Pokazano pierwsze {max_rows} z {len(df)} wierszy.", styles["Muted"]))
+        flowables.append(Spacer(1, 8))
+    return flowables
+
+
+def _params_df(params: dict | None) -> pd.DataFrame:
+    if not params:
+        return pd.DataFrame()
+    return pd.DataFrame([{"parametr": key, "wartosc": _report_value(value)} for key, value in sorted(params.items())])
+
+
+def _figure_flowable(title: str, fig: go.Figure, styles, width: int = 1120, height: int = 620):
+    import plotly.io as pio
+    from reportlab.platypus import Image, Paragraph, Spacer
+
+    fig = go.Figure(fig)
+    fig.update_layout(width=width, height=height)
+    image = pio.to_image(fig, format="png", width=width, height=height, scale=1.4)
+    stream = io.BytesIO(image)
+    return [
+        Paragraph(title, styles["Heading2"]),
+        Image(stream, width=740, height=740 * height / width),
+        Spacer(1, 12),
+    ]
+
+
+def _build_report_pdf(result_data: dict) -> bytes:
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    except Exception as exc:
+        raise RuntimeError("Brakuje biblioteki reportlab. Po deployu/rebuildzie zaktualizowane requirements ją doinstalują.") from exc
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+    )
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="TitleBee", parent=styles["Title"], fontSize=18, leading=22, textColor=colors.HexColor("#0f172a")))
+    styles.add(ParagraphStyle(name="Muted", parent=styles["BodyText"], fontSize=8, leading=10, textColor=colors.HexColor("#64748b")))
+    styles["Heading2"].fontSize = 11
+    styles["Heading2"].leading = 14
+    styles["Heading2"].textColor = colors.HexColor("#0f172a")
+
+    table_style = TableStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cbd5e1")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]
+    )
+
+    stats = result_data.get("stats", {})
+    capital = result_data.get("capital", INITIAL_CAPITAL)
+    equity_df = pd.DataFrame(result_data.get("equity", []))
+    fee_df = pd.DataFrame(result_data.get("fee_df", []))
+    windows_df = pd.DataFrame(result_data.get("windows_df", []))
+    direction_df = _direction_stats_from_result(result_data)
+    side_df = pd.DataFrame(result_data.get("side_bk", []))
+    cross_df = pd.DataFrame(result_data.get("cross_bk", []))
+    yr_df = pd.DataFrame(result_data.get("yr_bk", []))
+    q_df = pd.DataFrame(result_data.get("q_bk", []))
+    params = result_data.get("best_params") or result_data.get("params_used") or {}
+
+    story = [
+        Paragraph("Bee4 - raport wynikow", styles["TitleBee"]),
+        Paragraph(
+            f"Wygenerowano: {pd.Timestamp.utcnow().strftime('%Y-%m-%d %H:%M UTC')} | "
+            f"{str(result_data.get('mode', '')).upper()} {str(result_data.get('symbol', '')).upper()} {result_data.get('tf', '')}",
+            styles["Muted"],
+        ),
+        Spacer(1, 10),
+        Paragraph("Podsumowanie", styles["Heading2"]),
+        Table(_report_summary_rows(result_data), colWidths=[130, 250], style=table_style, hAlign="LEFT"),
+        Spacer(1, 12),
+        Paragraph("Long / Short", styles["Heading2"]),
+        Table(
+            [["side", "trades", "wins", "losses", "win_pnl_usd", "loss_pnl_usd", "net_pnl_usd"]]
+            + _df_for_report_table(direction_df).astype(str).values.tolist(),
+            repeatRows=1,
+            style=table_style,
+            hAlign="LEFT",
+        ),
+        Spacer(1, 12),
+        Paragraph("Parametry", styles["Heading2"]),
+        Table(
+            [["parametr", "wartosc"]] + _params_df(params).astype(str).values.tolist(),
+            repeatRows=1,
+            style=table_style,
+            hAlign="LEFT",
+        ),
+        PageBreak(),
+    ]
+
+    try:
+        story.extend(_figure_flowable("Equity / Drawdown", fig_eq(equity_df, capital), styles, width=1120, height=620))
+        story.extend(_figure_flowable("Cena + WT H1/H4", fig_report_price_wt(result_data), styles, width=1120, height=700))
+        if not fee_df.empty:
+            story.extend(_figure_flowable("Oplaty", fig_fee(fee_df), styles, width=1120, height=420))
+        if not windows_df.empty:
+            story.extend(_figure_flowable("Okna WFO", fig_wfo(windows_df), styles, width=1120, height=420))
+            story.extend(_figure_flowable("Rozkład parametrów WFO", fig_pdist(windows_df), styles, width=1120, height=820))
+    except Exception as exc:
+        raise RuntimeError("Nie udało się wyrenderować wykresów do PDF. Sprawdź, czy zainstalował się pakiet kaleido.") from exc
+
+    story.append(PageBreak())
+    story.extend(_table_flowables("Long vs Short", side_df, styles, table_style))
+    story.extend(_table_flowables("Statystyki long/short - wygrane i przegrane", direction_df, styles, table_style))
+    story.extend(_table_flowables("Bullish vs Bearish H1 cross", cross_df, styles, table_style))
+    story.extend(_table_flowables("Breakdown roczny", yr_df, styles, table_style))
+    story.extend(_table_flowables("Breakdown kwartalny", q_df, styles, table_style))
+    if not fee_df.empty:
+        story.extend(_table_flowables("Oplaty wg okresu", fee_df, styles, table_style))
+    if not windows_df.empty:
+        story.extend(_table_flowables("Okna WFO", windows_df, styles, table_style, max_cols=7, max_rows=60))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
 def _trade_detail_panel(trade: dict | None) -> html.Div:
     """Panel ze szczegolami wybranego trade'u."""
     if not trade:
@@ -727,6 +1241,69 @@ def _crop_chart_df(
     return df.iloc[start_idx:end_idx + 1].reset_index(drop=True)
 
 
+def _chart_param(params: dict | None, key: str, default):
+    params = params or {}
+    value = params.get(key, params.get(f"best_{key}", default))
+    return default if value is None else value
+
+
+def _chart_line_data(df: pd.DataFrame, column: str, precision: int) -> list[dict[str, float | int]]:
+    if column not in df.columns:
+        return []
+    series: list[dict[str, float | int]] = []
+    for row in df[["time", column]].itertuples(index=False):
+        value = getattr(row, column)
+        if pd.isna(value):
+            continue
+        series.append({"time": _unix_seconds(row.time), "value": round(float(value), precision)})
+    return series
+
+
+def _cross_markers(
+    df: pd.DataFrame,
+    wt1_col: str,
+    wt2_col: str,
+    label: str,
+    marker_prefix: str,
+) -> list[dict[str, object]]:
+    if wt1_col not in df.columns or wt2_col not in df.columns:
+        return []
+
+    prev_wt1 = df[wt1_col].shift(1)
+    prev_wt2 = df[wt2_col].shift(1)
+    green = (prev_wt1 <= prev_wt2) & (df[wt1_col] > df[wt2_col])
+    red = (prev_wt1 >= prev_wt2) & (df[wt1_col] < df[wt2_col])
+    markers: list[dict[str, object]] = []
+
+    for row in df.loc[green.fillna(False), ["time"]].itertuples(index=False):
+        markers.append(
+            {
+                "seriesId": wt1_col,
+                "time": _unix_seconds(row.time),
+                "position": "belowBar",
+                "shape": "circle",
+                "color": C["green"],
+                "text": f"{marker_prefix} L",
+                "label": f"{label} long cross",
+            }
+        )
+
+    for row in df.loc[red.fillna(False), ["time"]].itertuples(index=False):
+        markers.append(
+            {
+                "seriesId": wt1_col,
+                "time": _unix_seconds(row.time),
+                "position": "aboveBar",
+                "shape": "circle",
+                "color": C["red"],
+                "text": f"{marker_prefix} S",
+                "label": f"{label} short cross",
+            }
+        )
+
+    return markers
+
+
 def lightweight_chart_payload(
     symbol: str,
     tf: str,
@@ -742,6 +1319,7 @@ def lightweight_chart_payload(
             "candles": [],
             "lines": [],
             "signalLines": [],
+            "signalMarkers": [],
             "markers": [],
             "tradePins": [],
             "focusRange": None,
@@ -761,6 +1339,7 @@ def lightweight_chart_payload(
             "candles": [],
             "lines": [],
             "signalLines": [],
+            "signalMarkers": [],
             "markers": [],
             "tradePins": [],
             "focusRange": None,
@@ -805,30 +1384,44 @@ def lightweight_chart_payload(
             }
         )
 
+    channel_len = int(_chart_param(params, "wt_channel_len", DEFAULT_PARAMS["wt_channel_len"]))
+    avg_len = int(_chart_param(params, "wt_avg_len", DEFAULT_PARAMS["wt_avg_len"]))
+    signal_len = int(_chart_param(params, "wt_signal_len", DEFAULT_PARAMS["wt_signal_len"]))
+    h4_interval = str(_chart_param(params, "wt_h4_filter_interval", DEFAULT_PARAMS["wt_h4_filter_interval"]))
+
+    h1_wt1_col, h1_wt2_col = wt_columns(channel_len, avg_len, signal_len)
+    h4_wt1_col = htf_wt1_column(channel_len, avg_len, h4_interval)
+    h4_wt2_col = htf_wt2_column(channel_len, avg_len, signal_len, h4_interval)
+    if h1_wt1_col not in df.columns or h1_wt2_col not in df.columns:
+        h1_wt1_col, h1_wt2_col = "wt1", "wt2"
+    if h4_wt1_col not in df.columns or h4_wt2_col not in df.columns:
+        h4_wt1_col, h4_wt2_col = "h4_wt1", "h4_wt2"
+
     signal_specs = [
-        ("wt1", "WT1", C["blue"], 1.9, True),
-        ("wt2", "WT2", C["amber"], 2.2, True),
+        (h1_wt1_col, f"WT1 H1 ({channel_len}/{avg_len})", C["blue"], 2.0, True, 0),
+        (h1_wt2_col, f"WT2 H1 ({signal_len})", C["amber"], 2.1, True, 0),
+        (h4_wt1_col, f"WT1 H4 ({channel_len}/{avg_len})", C["purple"], 3.0, True, 2),
+        (h4_wt2_col, f"WT2 H4 ({signal_len})", C["coral"], 3.2, True, 2),
     ]
     signal_lines = []
-    for column, label, color, width, visible in signal_specs:
+    for column, label, color, width, visible, line_style in signal_specs:
         if column not in df.columns:
             continue
-        series = []
-        for row in df[["time", column]].itertuples(index=False):
-            value = getattr(row, column)
-            if pd.isna(value):
-                continue
-            series.append({"time": _unix_seconds(row.time), "value": round(float(value), 4)})
         signal_lines.append(
             {
                 "id": column,
                 "label": label,
                 "color": color,
                 "lineWidth": width,
+                "lineStyle": line_style,
                 "visible": visible,
-                "data": series,
+                "data": _chart_line_data(df, column, 4),
             }
         )
+
+    signal_markers = []
+    signal_markers.extend(_cross_markers(df, h1_wt1_col, h1_wt2_col, "H1", "H1"))
+    signal_markers.extend(_cross_markers(df, h4_wt1_col, h4_wt2_col, "H4", "H4"))
 
     time_values = [_unix_seconds(ts) for ts in df["time"]]
     level_specs = [
@@ -943,6 +1536,7 @@ def lightweight_chart_payload(
         "candles": candles,
         "lines": lines,
         "signalLines": signal_lines,
+        "signalMarkers": signal_markers,
         "markers": markers,
         "tradePins": trade_pins,
         "focusRange": focus_range,
@@ -1207,6 +1801,7 @@ def fig_chart(
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 def sidebar():
     SW = "285px"
+    saved_opts = _saved_result_options()
     return html.Div([
         # nagłówek
         html.Div([
@@ -1420,6 +2015,40 @@ def sidebar():
         html.Div(id="run-progress",style={
             "fontSize":"12px","color":C["amber"],"textAlign":"center","minHeight":"16px","marginTop":"4px"}),
 
+        html.Div([
+            sec("Zapis / odczyt wyników"),
+            html.Div([
+                html.Button("Zapisz wynik", id="btn-save-result", n_clicks=0, style={
+                    "flex":"1","background":C["surf2"],"border":f"1px solid {C['border']}",
+                    "borderRadius":"10px","color":C["text"],"padding":"9px 10px",
+                    "fontSize":"12px","fontWeight":"600","cursor":"pointer"}),
+                html.Button("Odśwież", id="btn-refresh-results", n_clicks=0, style={
+                    "width":"88px","background":"transparent","border":f"1px solid {C['border']}",
+                    "borderRadius":"10px","color":C["muted"],"padding":"9px 10px",
+                    "fontSize":"12px","fontWeight":"600","cursor":"pointer"}),
+            ], style={"display":"flex","gap":"8px","marginBottom":"10px"}),
+            dcc.Dropdown(
+                id="saved-result-select",
+                options=saved_opts,
+                value=(saved_opts[0]["value"] if saved_opts else None),
+                clearable=False,
+                placeholder="Brak zapisanych wyników",
+                className="wt-drp",
+                style={"color":"#0b1220"},
+            ),
+            html.Button("Wczytaj wybrany plik", id="btn-load-result", n_clicks=0, style={
+                "width":"100%","background":C["blue"],"border":"none","borderRadius":"10px",
+                "color":"#fff","padding":"10px","fontSize":"12px","fontWeight":"700",
+                "cursor":"pointer","marginTop":"10px"}),
+            html.Button("Raport PDF", id="btn-report-pdf", n_clicks=0, style={
+                "width":"100%","background":C["green"],"border":"none","borderRadius":"10px",
+                "color":"#07111b","padding":"10px","fontSize":"12px","fontWeight":"800",
+                "cursor":"pointer","marginTop":"8px"}),
+            html.Div(id="saved-result-status", style={
+                "fontSize":"11px","color":C["muted"],"textAlign":"center",
+                "minHeight":"16px","marginTop":"8px","lineHeight":"1.4"}),
+        ], style={**card_s, "padding":"14px 16px"}),
+
         dcc.Store(id="store-result"),
         dcc.Store(id="store-run-meta", data={"running": False}),
 
@@ -1457,6 +2086,7 @@ def main_panel():
         dcc.Store(id="store-chart-payload",  data=None),
         dcc.Store(id="store-server-token",   data=None, storage_type="session"),
         dcc.Download(id="download-trades"),
+        dcc.Download(id="download-report"),
         html.Div(id="chart-render-signal", style={"display":"none"}),
         dcc.Interval(id="poll",interval=15000,n_intervals=0),
         dcc.Location(id="_url", refresh=True),
@@ -1973,6 +2603,86 @@ def export_trades(n_clicks, result_data):
     filename = f"bee4_{mode}_{symbol}_{tf}_trades_{stamp}.csv"
     return dcc.send_data_frame(export_df.to_csv, filename, index=False, encoding="utf-8-sig")
 
+
+@app.callback(
+    Output("download-report", "data"),
+    Output("saved-result-status", "children", allow_duplicate=True),
+    Input("btn-report-pdf", "n_clicks"),
+    State("store-result", "data"),
+    prevent_initial_call=True,
+)
+def export_report_pdf(n_clicks, result_data):
+    if not n_clicks:
+        return dash.no_update, dash.no_update
+    if not result_data:
+        return dash.no_update, "Brak wyniku do raportu."
+    try:
+        pdf_bytes = _build_report_pdf(result_data)
+        filename = _report_filename(result_data)
+        return dcc.send_bytes(lambda buffer: buffer.write(pdf_bytes), filename), f"Wygenerowano raport: {filename}"
+    except Exception as exc:
+        return dash.no_update, f"Błąd raportu PDF: {exc}"
+
+
+@app.callback(
+    Output("saved-result-select", "options"),
+    Output("saved-result-select", "value"),
+    Output("saved-result-status", "children"),
+    Input("btn-save-result", "n_clicks"),
+    Input("btn-refresh-results", "n_clicks"),
+    State("store-result", "data"),
+    State("saved-result-select", "value"),
+    prevent_initial_call=True,
+)
+def save_or_refresh_result(save_clicks, refresh_clicks, result_data, current_value):
+    triggered = ctx.triggered_id
+    if triggered == "btn-save-result":
+        if not result_data:
+            return dash.no_update, dash.no_update, "Brak wyniku do zapisu."
+        try:
+            filename = _save_result_file(result_data)
+            options = _saved_result_options()
+            return options, filename, f"Zapisano: {filename}"
+        except Exception as exc:
+            return dash.no_update, dash.no_update, f"Błąd zapisu: {exc}"
+
+    options = _saved_result_options()
+    values = {opt["value"] for opt in options}
+    value = current_value if current_value in values else (options[0]["value"] if options else None)
+    msg = "Lista zapisów odświeżona." if options else "Brak zapisanych wyników."
+    return options, value, msg
+
+
+@app.callback(
+    Output("store-result", "data", allow_duplicate=True),
+    Output("store-selected-trade", "data", allow_duplicate=True),
+    Output("saved-result-status", "children", allow_duplicate=True),
+    Input("btn-load-result", "n_clicks"),
+    State("saved-result-select", "value"),
+    prevent_initial_call=True,
+)
+def load_saved_result(n_clicks, filename):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update
+    if not filename:
+        return dash.no_update, dash.no_update, "Wybierz zapisany plik."
+    try:
+        result = _load_result_file(filename)
+        mode = str(result.get("mode", "wynik")).upper()
+        symbol = str(result.get("symbol", ""))
+        tf = str(result.get("tf", ""))
+        ret = float(result.get("stats", {}).get("net_return_pct", 0.0) or 0.0)
+        ss(
+            running=False,
+            stop=False,
+            result=result,
+            status=f"✓ Wczytano zapisany wynik  |  {mode} {symbol} {tf}  |  {ret:+.2f}%",
+            progress="",
+        )
+        return result, None, f"Wczytano: {filename}"
+    except Exception as exc:
+        return dash.no_update, dash.no_update, f"Błąd wczytywania: {exc}"
+
 # ─── Callback: uruchom / stop ─────────────────────────────────────────────────
 @app.callback(
     Output("btn-run","disabled"),
@@ -2125,6 +2835,9 @@ def _result_metrics(result_data: dict | None) -> list:
     rr = stats.get("risk_reward_ratio", float("nan"))
     consistency = stats.get("consistency_pct", float("nan"))
     stability = stats.get("stability_score", float("nan"))
+    direction_df = _direction_stats_from_result(result_data)
+    long_stats = _direction_row(direction_df, "long")
+    short_stats = _direction_row(direction_df, "short")
 
     def metric_or_na(value, pattern="{:.2f}"):
         if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -2153,6 +2866,19 @@ def _result_metrics(result_data: dict | None) -> list:
         mcrd("Max DD", f"{dd:.1f}%", None, C["red"]),
         mcrd("CAGR", f"{cagr:.1f}%", f"{symbol} {tf}", pc(cagr)),
         mcrd("Transakcji", str(n_tr), f"exp: ${exp_v:.1f}/tr"),
+        mcrd("Long / Short", f"{int(long_stats['trades'])} / {int(short_stats['trades'])}", "liczba trade'ów"),
+        mcrd(
+            "Long W/L",
+            f"{int(long_stats['wins'])}/{int(long_stats['losses'])}",
+            f"{_money(long_stats['win_pnl_usd'])} / {_money(long_stats['loss_pnl_usd'])}",
+            C["green"] if float(long_stats["net_pnl_usd"]) >= 0 else C["red"],
+        ),
+        mcrd(
+            "Short W/L",
+            f"{int(short_stats['wins'])}/{int(short_stats['losses'])}",
+            f"{_money(short_stats['win_pnl_usd'])} / {_money(short_stats['loss_pnl_usd'])}",
+            C["green"] if float(short_stats["net_pnl_usd"]) >= 0 else C["red"],
+        ),
         mcrd("Return/DD", metric_or_na(rdd), "net return / max DD", metric_color(rdd)),
         mcrd("Sharpe", metric_or_na(sharpe), f"Sortino: {metric_or_na(sortino)}"),
         mcrd("R:R avg", metric_or_na(rr), "avg win / avg loss"),
@@ -2206,8 +2932,8 @@ def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) 
             ], className="panel-head"),
             html.Div(id="tv-chart", className="tv-chart"),
             html.Div(
-                "Górny panel pokazuje cenę, linię EMA filtra i markery trade'ów, a dolny przebiegi WT1 i WT2 "
-                "z poziomem zera oraz strefami sygnałowymi.",
+                "Górny panel pokazuje cenę, linię EMA filtra i markery trade'ów. Dolny panel ma tę samą "
+                "wysokość i pokazuje WT1/WT2 dla H1 oraz H4 z zielonymi i czerwonymi kropkami przecięć.",
                 className="chart-caption",
             ),
         ], className="result-panel"),
@@ -2440,6 +3166,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
 
         if tab == "brkdwn":
             side_df = pd.DataFrame(r.get("side_bk", []))
+            direction_df = _direction_stats_from_result(r)
             cross_df = pd.DataFrame(r.get("cross_bk", []))
             yr_df = pd.DataFrame(r.get("yr_bk", []))
             q_df = pd.DataFrame(r.get("q_bk", []))
@@ -2495,6 +3222,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
             return dash.no_update, metrics, html.Div([
                 html.Div(ext, style={"display": "flex", "gap": "10px", "flexWrap": "wrap", "marginBottom": "14px"}),
                 mini(side_df, "Long vs Short"),
+                mini(direction_df, "Long / Short - wygrane i przegrane"),
                 mini(cross_df, "Bullish vs Bearish H1 cross"),
                 mini(yr_df, "Breakdown roczny"),
                 mini(q_df, "Breakdown kwartalny"),
@@ -2619,8 +3347,8 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                     ], className="panel-head"),
                     html.Div(id="tv-chart", className="tv-chart"),
                     html.Div(
-                        "Cena, linia EMA filtra, markery transakcji oraz panel WaveTrend sa renderowane przez "
-                        "ten sam otwarty silnik Lightweight Charts od TradingView.",
+                        "Górny panel pokazuje cenę, linię EMA filtra i markery trade'ów. Dolny panel ma tę samą "
+                        "wysokość i pokazuje WT1/WT2 dla H1 oraz H4 z zielonymi i czerwonymi kropkami przecięć.",
                         className="chart-caption",
                     ),
                 ], className="result-panel"),

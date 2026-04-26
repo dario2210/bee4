@@ -467,6 +467,7 @@
       priceLineSeries: {},
       signalLineSeries: {},
       markersApi: null,
+      signalMarkersApis: {},
       resizeObserver: null,
       crosshairVertical: container.querySelector(".tv-crosshair-v"),
       crosshairPrice: container.querySelector(".tv-crosshair-h-price"),
@@ -563,6 +564,44 @@
     });
   }
 
+  function syncSeriesMarkers(seriesStore, markerStore, markers) {
+    const grouped = {};
+
+    (markers || []).forEach(function (marker) {
+      if (!marker || !marker.seriesId) {
+        return;
+      }
+      if (!grouped[marker.seriesId]) {
+        grouped[marker.seriesId] = [];
+      }
+      grouped[marker.seriesId].push({
+        time: marker.time,
+        position: marker.position || "aboveBar",
+        shape: marker.shape || "circle",
+        color: marker.color || "#69b7ff",
+        text: marker.text || "",
+      });
+    });
+
+    Object.keys(markerStore).forEach(function (seriesId) {
+      if (!grouped[seriesId] && markerStore[seriesId] && typeof markerStore[seriesId].setMarkers === "function") {
+        markerStore[seriesId].setMarkers([]);
+      }
+    });
+
+    Object.keys(grouped).forEach(function (seriesId) {
+      const series = seriesStore[seriesId];
+      if (!series) {
+        return;
+      }
+      if (markerStore[seriesId] && typeof markerStore[seriesId].setMarkers === "function") {
+        markerStore[seriesId].setMarkers(grouped[seriesId]);
+      } else {
+        markerStore[seriesId] = LightweightCharts.createSeriesMarkers(series, grouped[seriesId]);
+      }
+    });
+  }
+
   function render(payload) {
     const attempt = arguments.length > 1 ? arguments[1] : 0;
     const container = document.getElementById("tv-chart");
@@ -624,6 +663,7 @@
         state.markersApi.setMarkers([]);
       }
       state.markersApi = LightweightCharts.createSeriesMarkers(state.candles, payload.markers || []);
+      syncSeriesMarkers(state.signalLineSeries, state.signalMarkersApis, payload.signalMarkers || []);
 
       applyChartSizes(state);
 
