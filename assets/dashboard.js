@@ -61,6 +61,23 @@
         borderColor: "rgba(255,255,255,0.12)",
         timeVisible: true,
         secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+        lockVisibleTimeRangeOnResize: true,
+        rightBarStaysOnScroll: true,
+        rightOffset: 4,
+        minBarSpacing: 0.45,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
       },
       crosshair: {
         mode: LightweightCharts.CrosshairMode.Normal,
@@ -163,6 +180,136 @@
     };
   }
 
+  function normalizeRange(range) {
+    if (!range) {
+      return null;
+    }
+    const from = normalizeTime(range.from);
+    const to = normalizeTime(range.to);
+    if (from === null || to === null || !Number.isFinite(from) || !Number.isFinite(to)) {
+      return null;
+    }
+    if (to < from) {
+      return { from: to, to: from };
+    }
+    return { from: from, to: to };
+  }
+
+  function rangesClose(left, right) {
+    if (!left || !right) {
+      return false;
+    }
+    return Math.abs(Number(left.from) - Number(right.from)) < 0.5 &&
+      Math.abs(Number(left.to) - Number(right.to)) < 0.5;
+  }
+
+  function buildDataBounds(candles) {
+    const times = (candles || [])
+      .map(function (item) { return normalizeTime(item.time); })
+      .filter(function (time) { return time !== null && Number.isFinite(time); });
+    if (!times.length) {
+      return null;
+    }
+    return {
+      from: Math.min.apply(null, times),
+      to: Math.max.apply(null, times),
+    };
+  }
+
+  function clampRangeToData(state, range) {
+    const normalized = normalizeRange(range);
+    const bounds = state ? state.dataBounds : null;
+    if (!normalized || !bounds) {
+      return normalized;
+    }
+
+    const fullSpan = Math.max(bounds.to - bounds.from, 1);
+    const span = Math.max(normalized.to - normalized.from, Math.min(fullSpan, 60));
+    if (span >= fullSpan) {
+      return { from: bounds.from, to: bounds.to };
+    }
+
+    let from = normalized.from;
+    let to = normalized.to;
+    if (from < bounds.from) {
+      from = bounds.from;
+      to = from + span;
+    }
+    if (to > bounds.to) {
+      to = bounds.to;
+      from = to - span;
+    }
+    if (from < bounds.from) {
+      from = bounds.from;
+    }
+    if (to > bounds.to) {
+      to = bounds.to;
+    }
+    return { from: from, to: to };
+  }
+
+  function applyVisibleRange(chart, range) {
+    if (!chart || !chart.timeScale || !range) {
+      return;
+    }
+    const timeScale = chart.timeScale();
+    const current = typeof timeScale.getVisibleRange === "function"
+      ? normalizeRange(timeScale.getVisibleRange())
+      : null;
+    if (current && rangesClose(current, range)) {
+      return;
+    }
+    timeScale.setVisibleRange(range);
+  }
+
+  function releaseRangeSync(state) {
+    if (!state) {
+      return;
+    }
+    if (state.rangeSyncTimer) {
+      clearTimeout(state.rangeSyncTimer);
+    }
+    state.rangeSyncTimer = setTimeout(function () {
+      state.syncingTimeRange = false;
+      state.rangeSyncTimer = null;
+      scheduleOverlayRefresh(state);
+    }, 40);
+  }
+
+  function setSyncedRange(state, range, sourceChart, targetChart) {
+    const clamped = clampRangeToData(state, range);
+    if (!state || !clamped) {
+      return;
+    }
+
+    state.syncingTimeRange = true;
+    try {
+      if (sourceChart) {
+        applyVisibleRange(sourceChart, clamped);
+      }
+      if (targetChart) {
+        applyVisibleRange(targetChart, clamped);
+      }
+    } catch (error) {
+      console.warn("Could not apply chart range", error);
+    }
+    releaseRangeSync(state);
+  }
+
+  function resetChartView(state) {
+    if (!state) {
+      return;
+    }
+    state.syncingTimeRange = true;
+    try {
+      state.priceChart.timeScale().fitContent();
+      state.signalChart.timeScale().fitContent();
+    } catch (error) {
+      console.warn("Could not reset chart view", error);
+    }
+    releaseRangeSync(state);
+  }
+
   function destroyChartState(state) {
     if (!state) {
       return;
@@ -179,6 +326,12 @@
     }
     if (state.overlayFrame) {
       cancelAnimationFrame(state.overlayFrame);
+    }
+    if (state.rangeSyncTimer) {
+      clearTimeout(state.rangeSyncTimer);
+    }
+    if (state.resetButton && state.resetHandler) {
+      state.resetButton.removeEventListener("click", state.resetHandler);
     }
     try {
       if (state.priceChart && typeof state.priceChart.remove === "function") {
@@ -347,8 +500,6 @@
   }
 
   function linkTimeScales(state) {
-    let syncing = false;
-
     function mirror(source, target) {
       if (
         !source ||
@@ -360,17 +511,11 @@
         return;
       }
       source.timeScale().subscribeVisibleTimeRangeChange(function (range) {
-        if (syncing || !range) {
+        if (state.syncingTimeRange || !range) {
           scheduleOverlayRefresh(state);
           return;
         }
-        syncing = true;
-        try {
-          target.timeScale().setVisibleRange(range);
-        } catch (error) {
-          console.warn("Could not sync chart time range", error);
-        }
-        syncing = false;
+        setSyncedRange(state, range, source, target);
         scheduleOverlayRefresh(state);
       });
     }
@@ -407,27 +552,15 @@
   }
 
   function bindWheelLock(state) {
-    const wheelHandler = function (event) {
-      if (!event) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-    };
-
-    const wheelTargets = [state.container, state.pricePane, state.signalPane, state.priceHost, state.signalHost];
-    wheelTargets.forEach(function (target) {
-      if (target) {
-        target.addEventListener("wheel", wheelHandler, { passive: false });
-      }
-    });
-
-    state.wheelHandler = wheelHandler;
-    state.wheelTargets = wheelTargets;
+    // Lightweight Charts needs raw wheel events for smooth zooming. CSS
+    // overscroll-behavior keeps the page from stealing the gesture.
+    state.wheelHandler = null;
+    state.wheelTargets = [];
   }
 
   function buildChartState(container) {
     container.innerHTML = [
+      '<button type="button" class="tv-chart-reset" title="Wróć do pełnego zakresu danych">Reset widoku</button>',
       '<div class="tv-crosshair-v"></div>',
       '<div class="tv-chart-pane tv-chart-price">',
       '  <div class="tv-chart-host tv-chart-price-host"></div>',
@@ -478,6 +611,8 @@
       markersApi: null,
       signalMarkersApis: {},
       resizeObserver: null,
+      resetButton: container.querySelector(".tv-chart-reset"),
+      resetHandler: null,
       crosshairVertical: container.querySelector(".tv-crosshair-v"),
       crosshairPrice: container.querySelector(".tv-crosshair-h-price"),
       crosshairSignal: container.querySelector(".tv-crosshair-h-signal"),
@@ -488,9 +623,19 @@
       selectedTradeNo: null,
       lastCrosshair: null,
       overlayFrame: 0,
+      syncingTimeRange: false,
+      rangeSyncTimer: null,
+      dataBounds: null,
       wheelHandler: null,
       wheelTargets: [],
     };
+
+    state.resetHandler = function () {
+      resetChartView(state);
+    };
+    if (state.resetButton) {
+      state.resetButton.addEventListener("click", state.resetHandler);
+    }
 
     linkTimeScales(state);
     subscribeCrosshair(state);
@@ -659,11 +804,13 @@
         return "";
       }
 
-      state.candles.setData(payload.candles || []);
+      const candlesData = payload.candles || [];
+      state.dataBounds = buildDataBounds(candlesData);
+      state.candles.setData(candlesData);
       syncLineSeries(state.priceChart, state.priceLineSeries, payload.lines || []);
       syncLineSeries(state.signalChart, state.signalLineSeries, payload.signalLines || []);
 
-      state.candleLookup = buildCandleLookup(payload.candles || []);
+      state.candleLookup = buildCandleLookup(candlesData);
       state.signalLookup = buildSignalLookup(payload.signalLines || []);
       state.tradePins = payload.tradePins || [];
       state.selectedTradeNo = payload.selectedTradeNo;
@@ -677,11 +824,9 @@
       applyChartSizes(state);
 
       if (payload.focusRange && payload.focusRange.from && payload.focusRange.to) {
-        state.priceChart.timeScale().setVisibleRange(payload.focusRange);
-        state.signalChart.timeScale().setVisibleRange(payload.focusRange);
+        setSyncedRange(state, payload.focusRange, state.priceChart, state.signalChart);
       } else {
-        state.priceChart.timeScale().fitContent();
-        state.signalChart.timeScale().fitContent();
+        resetChartView(state);
       }
 
       scheduleOverlayRefresh(state);

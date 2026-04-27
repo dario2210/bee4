@@ -110,6 +110,28 @@ p {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(5, 10, 17, 0.55));
 }
 
+.tv-chart-reset {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 12;
+  border: 1px solid rgba(105, 183, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(6, 12, 20, 0.82);
+  color: var(--bee-text);
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+}
+
+.tv-chart-reset:hover {
+  border-color: rgba(105, 183, 255, 0.62);
+  background: rgba(15, 29, 48, 0.96);
+}
+
 .tv-chart-pane {
   position: relative;
   min-height: 0;
