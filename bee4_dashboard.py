@@ -1400,8 +1400,8 @@ def lightweight_chart_payload(
     signal_specs = [
         (h1_wt1_col, f"WT1 H1 ({channel_len}/{avg_len})", C["blue"], 2.0, True, 0),
         (h1_wt2_col, f"WT2 H1 ({signal_len})", C["amber"], 2.1, True, 0),
-        (h4_wt1_col, f"WT1 H4 ({channel_len}/{avg_len})", C["purple"], 3.0, True, 2),
-        (h4_wt2_col, f"WT2 H4 ({signal_len})", C["coral"], 3.2, True, 2),
+        (h4_wt1_col, f"WT1 H4 ({channel_len}/{avg_len})", C["purple"], 3.0, True, 0),
+        (h4_wt2_col, f"WT2 H4 ({signal_len})", C["coral"], 3.2, True, 0),
     ]
     signal_lines = []
     for column, label, color, width, visible, line_style in signal_specs:
@@ -2324,7 +2324,12 @@ def _worker(
         df = df.reset_index(drop=True)
 
         if len(df) < 100:
-            ss(running=False, status="✗ Za mało danych po filtrowaniu.", progress=""); return
+            ss(
+                running=False,
+                status=f"✗ Za mało danych po filtrowaniu: zostało {len(df)} świec, minimum 100.",
+                progress="Sprawdź zakres dat, timeframe albo czy CSV po pobraniu zawiera wybrany okres.",
+            )
+            return
 
         fee_rate_val = float(fee if fee is not None and fee != "" else FEE_RATE * 100) / 100.0
         slip_bps_val = float(slip if slip is not None and slip != "" else DEFAULT_PARAMS.get("slippage_bps", 0.0))
