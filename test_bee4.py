@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import bee4_binance
 from bee4_binance import interval_to_ms, wfo_bars
 from bee4_data import (
     htf_wt1_column,
@@ -477,6 +478,43 @@ class TestWFOHelpers:
 
     def test_interval_to_ms(self):
         assert interval_to_ms("1h") == 3_600_000
+
+    def test_update_csv_cache_backfills_requested_start(self, monkeypatch):
+        path = Path(".test_cache_backfill.csv")
+        first_ms = int(pd.Timestamp("2025-01-01 00:00", tz="UTC").timestamp() * 1000)
+        future_ms = int(pd.Timestamp("2099-01-01 00:00", tz="UTC").timestamp() * 1000)
+        requested_ms = int(pd.Timestamp("2023-01-01 00:00", tz="UTC").timestamp() * 1000)
+        try:
+            _write_csv(path, "open_time", [first_ms, future_ms])
+            calls = []
+
+            def fake_fetch(symbol, interval, start_time_ms=None, end_time_ms=None, market="spot", verbose=True):
+                calls.append((start_time_ms, end_time_ms))
+                return pd.DataFrame(
+                    {
+                        "open_time": [start_time_ms, end_time_ms],
+                        "open": [100.0, 101.0],
+                        "high": [101.0, 102.0],
+                        "low": [99.0, 100.0],
+                        "close": [100.5, 101.5],
+                        "volume": [1.0, 1.0],
+                    }
+                )
+
+            monkeypatch.setattr(bee4_binance, "fetch_klines_binance", fake_fetch)
+            out = bee4_binance.update_csv_cache(
+                str(path),
+                symbol="ETHUSDT",
+                interval="1h",
+                start_date="2023-01-01",
+                verbose=False,
+            )
+
+            assert calls == [(requested_ms, first_ms - interval_to_ms("1h"))]
+            assert int(out["open_time"].min()) == requested_ms
+            assert int(out["open_time"].iloc[0]) == requested_ms
+        finally:
+            path.unlink(missing_ok=True)
 
     def test_save_and_load_params_json(self):
         from bee4_params import save_params
