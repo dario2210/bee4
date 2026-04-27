@@ -206,6 +206,34 @@ p {
   border-style: dashed;
 }
 
+.tv-trade-pin.is-signal {
+  background: rgba(6, 12, 20, 0.82);
+  border-style: dashed;
+  opacity: 0.94;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+}
+
+.tv-trade-pin.is-signal.is-accepted {
+  border-style: solid;
+  background: rgba(6, 12, 20, 0.98);
+}
+
+.tv-trade-pin.is-signal.is-rejected {
+  color: #dbeafe;
+}
+
+.tv-trade-pin.is-signal::after {
+  background: rgba(6, 12, 20, 0.96);
+  border: 2px solid var(--pin-color);
+  box-sizing: border-box;
+}
+
+.tv-trade-pin.is-signal.is-accepted::after {
+  background: var(--pin-color);
+  border: none;
+}
+
 .tv-trade-pin.is-selected {
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 0 0 4px rgba(105, 183, 255, 0.22);
 }
@@ -216,6 +244,24 @@ p {
 
 .chart-caption {
   margin-top: 12px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.chart-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 9px;
+  border: 1px solid var(--bee-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .detail-panel-wrap > div {

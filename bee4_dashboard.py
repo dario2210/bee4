@@ -67,6 +67,12 @@ _state  = {"running": False, "stop": False, "status": "", "progress": "",
 _chart_df_cache: dict = {}   # (symbol, tf) → df z wskaźnikami
 _APP_DIR = Path(__file__).resolve().parent
 _SAVED_RUNS_DIR = _APP_DIR / "results" / "saved_runs"
+CHART_VIEW_OPTIONS = [
+    {"label": "Standard", "value": "standard"},
+    {"label": "Diagnostyka sygnałów", "value": "diagnostic"},
+    {"label": "Tylko transakcje", "value": "trades"},
+]
+CHART_VIEW_VALUES = {item["value"] for item in CHART_VIEW_OPTIONS}
 
 def gs():
     with _lock: return dict(_state)
@@ -1304,6 +1310,254 @@ def _cross_markers(
     return markers
 
 
+def _chart_view_mode(value: str | None) -> str:
+    mode = str(value or "standard").strip().lower()
+    return mode if mode in CHART_VIEW_VALUES else "standard"
+
+
+def _fmt_diag(value, digits: int = 2) -> str:
+    try:
+        number = float(value)
+        if np.isnan(number):
+            return "n/d"
+        return f"{number:.{digits}f}"
+    except (TypeError, ValueError):
+        return "n/d"
+
+
+def _safe_diag_token(value: str) -> str:
+    return "".join(ch if ch.isalnum() else "-" for ch in str(value).lower()).strip("-") or "other"
+
+
+def _diagnostic_trade_lookup(trades_df: pd.DataFrame) -> dict[tuple[int, str], dict[str, object]]:
+    lookup: dict[tuple[int, str], dict[str, object]] = {}
+    if trades_df is None or trades_df.empty:
+        return lookup
+    for trade in trades_df.itertuples(index=False):
+        entry_time = pd.to_datetime(getattr(trade, "entry_time", None), utc=True, errors="coerce")
+        if pd.isna(entry_time):
+            continue
+        side = str(getattr(trade, "side", "")).lower()
+        if side not in ("long", "short"):
+            continue
+        lookup[(_unix_seconds(entry_time), side)] = {
+            "trade_no": int(_as_float(getattr(trade, "trade_no", 0), 0.0)),
+            "side": side,
+            "reason": str(getattr(trade, "reason", "") or ""),
+            "pnl": _as_float(getattr(trade, "pnl", 0.0), 0.0),
+        }
+    return lookup
+
+
+def _active_trade_at(trades_df: pd.DataFrame, ts: pd.Timestamp) -> dict[str, object] | None:
+    if trades_df is None or trades_df.empty:
+        return None
+    if "entry_time" not in trades_df.columns or "exit_time" not in trades_df.columns:
+        return None
+    active = trades_df[
+        (trades_df["entry_time"] <= ts)
+        & (trades_df["exit_time"] > ts)
+    ]
+    if active.empty:
+        return None
+    row = active.iloc[0]
+    return {
+        "trade_no": int(_as_float(row.get("trade_no", 0), 0.0)),
+        "side": str(row.get("side", "")).lower(),
+    }
+
+
+def _diag_h4_state(row: pd.Series, side: str, params: dict, h4_wt1_col: str, h4_wt2_col: str) -> tuple[bool, str]:
+    h4_wt1 = _as_float(row.get(h4_wt1_col, np.nan), np.nan)
+    h4_wt2 = _as_float(row.get(h4_wt2_col, np.nan), np.nan)
+    h4_delta = h4_wt1 - h4_wt2 if not np.isnan(h4_wt1) and not np.isnan(h4_wt2) else np.nan
+    h4_prev_delta = _as_float(row.get("h4_prev_wt_delta", np.nan), np.nan)
+    if any(np.isnan(v) for v in [h4_wt1, h4_wt2, h4_delta, h4_prev_delta]):
+        return False, "brak danych H4"
+
+    current_gap = abs(h4_delta)
+    prev_gap = abs(h4_prev_delta)
+    converging = current_gap < prev_gap
+    if side == "long":
+        threshold = float(params.get("wt_h4_long_filter_max", DEFAULT_PARAMS["wt_h4_long_filter_max"]))
+        in_zone = h4_wt1 <= threshold and h4_wt2 <= threshold
+        correct_direction = h4_delta > h4_prev_delta
+        if not in_zone:
+            return False, f"H4 za wysoko (WT1/WT2 muszą być <= {threshold:g})"
+        if not converging or not correct_direction:
+            return False, "H4 nie zbliża linii dla longa"
+        return True, "H4 OK"
+
+    threshold = float(params.get("wt_h4_short_filter_min", DEFAULT_PARAMS["wt_h4_short_filter_min"]))
+    in_zone = h4_wt1 >= threshold and h4_wt2 >= threshold
+    correct_direction = h4_delta < h4_prev_delta
+    if not in_zone:
+        return False, f"H4 za nisko (WT1/WT2 muszą być >= {threshold:g})"
+    if not converging or not correct_direction:
+        return False, "H4 nie zbliża linii dla shorta"
+    return True, "H4 OK"
+
+
+def _diagnostic_rejection(
+    row: pd.Series,
+    side: str,
+    params: dict,
+    h1_wt1_col: str,
+    h1_wt2_col: str,
+    h4_wt1_col: str,
+    h4_wt2_col: str,
+    active_trade: dict[str, object] | None,
+) -> tuple[str, str]:
+    wt1 = _as_float(row.get(h1_wt1_col, np.nan), np.nan)
+    wt2 = _as_float(row.get(h1_wt2_col, np.nan), np.nan)
+    level_now = min(abs(wt1), abs(wt2)) if not np.isnan(wt1) and not np.isnan(wt2) else np.nan
+    min_level = float(params.get("wt_min_signal_level", DEFAULT_PARAMS["wt_min_signal_level"]))
+    allow_longs = bool(params.get("allow_longs", True))
+    allow_shorts = bool(params.get("allow_shorts", True))
+
+    if side == "long" and not allow_longs:
+        return "direction", "long wyłączony w ustawieniach"
+    if side == "short" and not allow_shorts:
+        return "direction", "short wyłączony w ustawieniach"
+    if np.isnan(wt1) or np.isnan(wt2):
+        return "data", "brak danych WT H1"
+
+    if side == "long":
+        threshold = float(params.get("wt_long_entry_max_above_zero", DEFAULT_PARAMS["wt_long_entry_max_above_zero"]))
+        if wt1 > threshold or wt2 > threshold:
+            return "zone", f"H1 poza strefą long (WT1/WT2 muszą być <= {threshold:g})"
+    else:
+        threshold = float(params.get("wt_short_entry_min_below_zero", DEFAULT_PARAMS["wt_short_entry_min_below_zero"]))
+        if wt1 < threshold or wt2 < threshold:
+            return "zone", f"H1 poza strefą short (WT1/WT2 muszą być >= {threshold:g})"
+
+    if np.isnan(level_now) or level_now < min_level:
+        return "level", f"za słaby poziom WT ({_fmt_diag(level_now)} < {min_level:g})"
+
+    h4_ok, h4_reason = _diag_h4_state(row, side, params, h4_wt1_col, h4_wt2_col)
+    if not h4_ok:
+        return "h4", h4_reason
+
+    if active_trade:
+        return "position", f"pozycja już otwarta: #{active_trade['trade_no']} {str(active_trade['side']).upper()}"
+
+    return "other", "warunki wyglądają OK, ale brak trade'u w wyniku; sprawdź okno WFO/parametry"
+
+
+def _diagnostic_signal_overlays(
+    df: pd.DataFrame,
+    trades_df: pd.DataFrame,
+    params: dict,
+    h1_wt1_col: str,
+    h1_wt2_col: str,
+    h4_wt1_col: str,
+    h4_wt2_col: str,
+    filter_mode: str = "all",
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if df.empty or h1_wt1_col not in df.columns or h1_wt2_col not in df.columns:
+        return [], []
+
+    trade_lookup = _diagnostic_trade_lookup(trades_df)
+    filter_mode = str(filter_mode or "all").lower()
+    colors = {
+        "accepted_long": C["green"],
+        "accepted_short": C["coral"],
+        "h4": C["amber"],
+        "zone": C["blue"],
+        "position": C["muted"],
+        "direction": "#fb923c",
+        "level": C["purple"],
+        "data": C["muted"],
+        "other": "#c084fc",
+    }
+    signal_markers: list[dict[str, object]] = []
+    price_pins: list[dict[str, object]] = []
+
+    prev_wt1 = df[h1_wt1_col].shift(1)
+    prev_wt2 = df[h1_wt2_col].shift(1)
+    long_cross = (prev_wt1 <= prev_wt2) & (df[h1_wt1_col] > df[h1_wt2_col])
+    short_cross = (prev_wt1 >= prev_wt2) & (df[h1_wt1_col] < df[h1_wt2_col])
+
+    for pos, (_, row) in enumerate(df.iterrows()):
+        if bool(long_cross.iloc[pos]):
+            side = "long"
+        elif bool(short_cross.iloc[pos]):
+            side = "short"
+        else:
+            continue
+        if filter_mode in ("long", "short") and side != filter_mode:
+            continue
+
+        ts = pd.to_datetime(row["time"], utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+        time_sec = _unix_seconds(ts)
+        accepted_trade = trade_lookup.get((time_sec, side))
+        active_trade = None if accepted_trade else _active_trade_at(trades_df, ts)
+        if accepted_trade:
+            code = "accepted"
+            reason = f"wejście wykonane jako trade #{accepted_trade['trade_no']}"
+            color = colors["accepted_long"] if side == "long" else colors["accepted_short"]
+            text = f"{'L' if side == 'long' else 'S'}✓"
+            label = f"{'LONG' if side == 'long' else 'SHORT'} #{accepted_trade['trade_no']}"
+        else:
+            code, reason = _diagnostic_rejection(
+                row,
+                side,
+                params,
+                h1_wt1_col,
+                h1_wt2_col,
+                h4_wt1_col,
+                h4_wt2_col,
+                active_trade,
+            )
+            color = colors.get(code, colors["other"])
+            text = f"{'L' if side == 'long' else 'S'}?"
+            label = f"{'LONG' if side == 'long' else 'SHORT'} odrzucony"
+
+        wt1 = _as_float(row.get(h1_wt1_col, np.nan), np.nan)
+        wt2 = _as_float(row.get(h1_wt2_col, np.nan), np.nan)
+        h4_wt1 = _as_float(row.get(h4_wt1_col, np.nan), np.nan)
+        h4_wt2 = _as_float(row.get(h4_wt2_col, np.nan), np.nan)
+        tooltip = (
+            f"{label}\n"
+            f"Decyzja: {'WEJŚCIE' if accepted_trade else 'BRAK WEJŚCIA'}\n"
+            f"Powód: {reason}\n"
+            f"WT1 H1: {_fmt_diag(wt1)} | WT2 H1: {_fmt_diag(wt2)}\n"
+            f"WT1 H4: {_fmt_diag(h4_wt1)} | WT2 H4: {_fmt_diag(h4_wt2)}\n"
+            f"Cena: {_fmt_diag(row.get('close', np.nan), 4)}"
+        )
+
+        signal_markers.append(
+            {
+                "seriesId": h1_wt1_col,
+                "time": time_sec,
+                "position": "belowBar" if side == "long" else "aboveBar",
+                "shape": "circle",
+                "color": color,
+                "text": text,
+                "label": reason,
+            }
+        )
+        price_pins.append(
+            {
+                "tradeNo": accepted_trade.get("trade_no") if accepted_trade else None,
+                "time": time_sec,
+                "price": round(float(row["close"]), 6),
+                "label": text,
+                "anchor": "below" if side == "long" else "above",
+                "kind": "signal",
+                "decision": "accepted" if accepted_trade else "rejected",
+                "rejectCode": _safe_diag_token(code),
+                "side": side,
+                "color": color,
+                "tooltip": tooltip,
+            }
+        )
+
+    return signal_markers, price_pins
+
+
 def lightweight_chart_payload(
     symbol: str,
     tf: str,
@@ -1312,10 +1566,13 @@ def lightweight_chart_payload(
     selected_trade: dict | None = None,
     filter_mode: str = "all",
     params: dict | None = None,
+    view_mode: str = "standard",
 ) -> dict[str, object]:
+    view_mode = _chart_view_mode(view_mode)
     source_df = _chart_source_df(symbol, tf)
     if source_df is None or source_df.empty:
         return {
+            "chartView": view_mode,
             "candles": [],
             "lines": [],
             "signalLines": [],
@@ -1336,6 +1593,7 @@ def lightweight_chart_payload(
     )
     if df.empty:
         return {
+            "chartView": view_mode,
             "candles": [],
             "lines": [],
             "signalLines": [],
@@ -1419,9 +1677,26 @@ def lightweight_chart_payload(
             }
         )
 
-    signal_markers = []
-    signal_markers.extend(_cross_markers(df, h1_wt1_col, h1_wt2_col, "H1", "H1"))
-    signal_markers.extend(_cross_markers(df, h4_wt1_col, h4_wt2_col, "H4", "H4"))
+    h1_cross_markers = _cross_markers(df, h1_wt1_col, h1_wt2_col, "H1", "H1")
+    h4_cross_markers = _cross_markers(df, h4_wt1_col, h4_wt2_col, "H4", "H4")
+    diagnostic_signal_markers: list[dict[str, object]] = []
+    diagnostic_pins: list[dict[str, object]] = []
+    if view_mode == "diagnostic":
+        diagnostic_signal_markers, diagnostic_pins = _diagnostic_signal_overlays(
+            df,
+            normalized_trades,
+            params,
+            h1_wt1_col,
+            h1_wt2_col,
+            h4_wt1_col,
+            h4_wt2_col,
+            filter_mode=filter_mode,
+        )
+        signal_markers = diagnostic_signal_markers + h4_cross_markers
+    elif view_mode == "trades":
+        signal_markers = []
+    else:
+        signal_markers = h1_cross_markers + h4_cross_markers
 
     time_values = [_unix_seconds(ts) for ts in df["time"]]
     level_specs = [
@@ -1498,6 +1773,9 @@ def lightweight_chart_payload(
                 }
             )
 
+    if view_mode == "diagnostic":
+        trade_pins.extend(diagnostic_pins)
+
     if windows_df is not None and not windows_df.empty and "live_start" in windows_df.columns and len(windows_df) <= 20:
         for row in windows_df.itertuples(index=False):
             live_start = pd.to_datetime(getattr(row, "live_start", None), utc=True, errors="coerce")
@@ -1533,6 +1811,7 @@ def lightweight_chart_payload(
     return {
         "symbol": symbol,
         "tf": tf,
+        "chartView": view_mode,
         "candles": candles,
         "lines": lines,
         "signalLines": signal_lines,
@@ -2083,6 +2362,7 @@ def main_panel():
         html.Div(id="tab-content"),
         dcc.Store(id="store-selected-trade", data=None),
         dcc.Store(id="store-chart-filter",   data="all"),
+        dcc.Store(id="store-chart-view",     data="standard"),
         dcc.Store(id="store-chart-payload",  data=None),
         dcc.Store(id="store-server-token",   data=None, storage_type="session"),
         dcc.Download(id="download-trades"),
@@ -2550,6 +2830,15 @@ def check_server_token(_, stored_token):
 def on_chart_filter(fval):
     return fval
 
+
+@app.callback(
+    Output("store-chart-view","data"),
+    Input("chart-view-radio","value"),
+    prevent_initial_call=True,
+)
+def on_chart_view(value):
+    return _chart_view_mode(value)
+
 # ─── Callback: klik w tabeli → zoom na wykresie ───────────────────────────────
 @app.callback(
     Output("store-selected-trade","data"),
@@ -2891,8 +3180,29 @@ def _result_metrics(result_data: dict | None) -> list:
     ]
 
 
-def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) -> html.Div:
+def _legend_chip(label: str, color: str, note: str) -> html.Span:
+    return html.Span([
+        html.Span(style={
+            "display": "inline-block",
+            "width": "9px",
+            "height": "9px",
+            "borderRadius": "999px",
+            "background": color,
+            "marginRight": "6px",
+            "boxShadow": f"0 0 0 2px {color}33",
+        }),
+        html.Span(label, style={"fontWeight": "700", "color": C["text"]}),
+        html.Span(f" - {note}", style={"color": C["muted"]}),
+    ], className="chart-legend-chip")
+
+
+def _build_chart_tab(
+    selected_trade: dict | None,
+    chart_filter_val: str | None,
+    chart_view_val: str | None,
+) -> html.Div:
     chart_filt = chart_filter_val or "all"
+    chart_view = _chart_view_mode(chart_view_val)
     filter_opts = [
         {"label": "Wszystkie", "value": "all"},
         {"label": "Long", "value": "long"},
@@ -2902,20 +3212,39 @@ def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) 
     ]
     return html.Div([
         html.Div([
-            html.Span(
-                "Filtr: ",
-                style={"fontSize": "11px", "color": C["muted"], "marginRight": "8px", "lineHeight": "28px"},
-            ),
-            dcc.RadioItems(
-                id="chart-filter-radio",
-                options=filter_opts,
-                value=chart_filt,
-                inline=True,
-                inputStyle={"marginRight": "3px", "accentColor": C["blue"]},
-                labelStyle={"color": C["text"], "fontSize": "12px", "marginRight": "12px", "cursor": "pointer"},
-            ),
+            html.Div([
+                html.Span(
+                    "Filtr: ",
+                    style={"fontSize": "11px", "color": C["muted"], "marginRight": "8px", "lineHeight": "28px"},
+                ),
+                dcc.RadioItems(
+                    id="chart-filter-radio",
+                    options=filter_opts,
+                    value=chart_filt,
+                    inline=True,
+                    inputStyle={"marginRight": "3px", "accentColor": C["blue"]},
+                    labelStyle={"color": C["text"], "fontSize": "12px", "marginRight": "12px", "cursor": "pointer"},
+                ),
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
+            html.Div([
+                html.Span(
+                    "Widok: ",
+                    style={"fontSize": "11px", "color": C["muted"], "marginRight": "8px", "lineHeight": "28px"},
+                ),
+                dcc.RadioItems(
+                    id="chart-view-radio",
+                    options=CHART_VIEW_OPTIONS,
+                    value=chart_view,
+                    inline=True,
+                    inputStyle={"marginRight": "3px", "accentColor": C["amber"]},
+                    labelStyle={"color": C["text"], "fontSize": "12px", "marginRight": "12px", "cursor": "pointer"},
+                ),
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
         ], style={
             "display": "flex",
+            "justifyContent": "space-between",
+            "gap": "14px",
+            "flexWrap": "wrap",
             "alignItems": "center",
             "marginBottom": "14px",
             "background": C["surf2"],
@@ -2936,9 +3265,17 @@ def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) 
                 ], className="tv-attribution"),
             ], className="panel-head"),
             html.Div(id="tv-chart", className="tv-chart"),
+            html.Div([
+                _legend_chip("pełny punkt", C["green"], "realne wejście long / short na wykresie ceny"),
+                _legend_chip("żółty", C["amber"], "odrzucone przez filtr H4"),
+                _legend_chip("niebieski", C["blue"], "odrzucone przez strefę H1"),
+                _legend_chip("szary", C["muted"], "sygnał pojawił się przy otwartej pozycji"),
+                _legend_chip("pomarańczowy", "#fb923c", "wyłączony kierunek long/short"),
+            ], className="chart-legend"),
             html.Div(
                 "Górny panel pokazuje cenę, linię EMA filtra i markery trade'ów. Dolny panel ma tę samą "
-                "wysokość i pokazuje WT1/WT2 dla H1 oraz H4 z zielonymi i czerwonymi kropkami przecięć.",
+                "wysokość i pokazuje WT1/WT2 dla H1 oraz H4. W trybie Diagnostyka kropki H1 pokazują również "
+                "sygnały odrzucone; najedź na marker L?/S?, aby zobaczyć powód.",
                 className="chart-caption",
             ),
         ], className="result-panel"),
@@ -2953,10 +3290,11 @@ def _build_chart_tab(selected_trade: dict | None, chart_filter_val: str | None) 
     Input("tabs","value"),
     Input("store-result","data"),
     Input("store-chart-filter","data"),
+    Input("store-chart-view","data"),
     Input("store-selected-trade","data"),
     prevent_initial_call=True,
 )
-def render_results(tab, result_data, chart_filter_val, selected_trade_val):
+def render_results(tab, result_data, chart_filter_val, chart_view_val, selected_trade_val):
     r = result_data
     if not r:
         return None, [], _empty_results_view()
@@ -2987,8 +3325,9 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                 selected_trade=selected_trade_val,
                 filter_mode=chart_filter_val or "all",
                 params=r.get("best_params") or r.get("params_used") or DEFAULT_PARAMS,
+                view_mode=chart_view_val or "standard",
             )
-            return chart_payload, metrics, _build_chart_tab(selected_trade_val, chart_filter_val)
+            return chart_payload, metrics, _build_chart_tab(selected_trade_val, chart_filter_val, chart_view_val)
 
         if tab == "trades":
             trades_df = pd.DataFrame(r.get("trades", []))
@@ -3314,6 +3653,7 @@ def render_results(tab, result_data, chart_filter_val, selected_trade_val):
                 selected_trade=sel_trade,
                 filter_mode=chart_filt,
                 params=r.get("best_params") or r.get("params_used") or DEFAULT_PARAMS,
+                view_mode=chart_view_val or "standard",
             )
             _filter_opts = [
                 {"label":"Wszystkie","value":"all"},

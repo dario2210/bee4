@@ -235,9 +235,18 @@
         return;
       }
 
+      const kind = String(pin.kind || "entry").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+      const decision = String(pin.decision || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+      const rejectCode = String(pin.rejectCode || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
       const classes = ["tv-trade-pin"];
       classes.push(pin.anchor === "below" ? "is-below" : "is-above");
-      classes.push(pin.kind === "entry" ? "is-entry" : "is-exit");
+      classes.push("is-" + kind);
+      if (decision) {
+        classes.push("is-" + decision);
+      }
+      if (rejectCode) {
+        classes.push("reject-" + rejectCode);
+      }
       if (pin.side === "short") {
         classes.push("is-short");
       }
