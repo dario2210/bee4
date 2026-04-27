@@ -44,11 +44,22 @@
       .replace(/'/g, "&#39;");
   }
 
+  function safeClass(value) {
+    return String(value || "")
+      .replace(/[^a-z0-9_-]/gi, "-")
+      .toLowerCase();
+  }
+
   function baseChartOptions(container) {
     return {
       layout: {
         background: { color: "transparent" },
         textColor: "#dbeafe",
+        panes: {
+          separatorColor: "rgba(131,153,179,0.22)",
+          separatorHoverColor: "rgba(105,183,255,0.62)",
+          enableResize: false,
+        },
       },
       grid: {
         vertLines: { color: "rgba(255,255,255,0.06)" },
@@ -81,102 +92,9 @@
       },
       crosshair: {
         mode: LightweightCharts.CrosshairMode.Normal,
-        vertLine: { visible: false, labelVisible: false },
-        horzLine: { visible: false, labelVisible: false },
       },
       width: container.clientWidth,
       height: container.clientHeight,
-    };
-  }
-
-  function createChart(container, extraOptions) {
-    const options = baseChartOptions(container);
-    if (extraOptions) {
-      if (extraOptions.layout) {
-        options.layout = Object.assign({}, options.layout, extraOptions.layout);
-      }
-      if (extraOptions.grid) {
-        options.grid = Object.assign({}, options.grid, extraOptions.grid);
-      }
-      if (extraOptions.rightPriceScale) {
-        options.rightPriceScale = Object.assign({}, options.rightPriceScale, extraOptions.rightPriceScale);
-      }
-      if (extraOptions.timeScale) {
-        options.timeScale = Object.assign({}, options.timeScale, extraOptions.timeScale);
-      }
-      if (extraOptions.crosshair) {
-        options.crosshair = Object.assign({}, options.crosshair, extraOptions.crosshair);
-      }
-    }
-    return LightweightCharts.createChart(container, options);
-  }
-
-  function hideGuide(element) {
-    if (element) {
-      element.style.display = "none";
-    }
-  }
-
-  function showGuide(element, axis, value) {
-    if (!element || !Number.isFinite(value)) {
-      hideGuide(element);
-      return;
-    }
-    element.style.display = "block";
-    element.style.transform = axis === "x"
-      ? "translateX(" + Math.round(value) + "px)"
-      : "translateY(" + Math.round(value) + "px)";
-  }
-
-  function hideCrosshair(state) {
-    if (!state) {
-      return;
-    }
-    state.lastCrosshair = null;
-    hideGuide(state.crosshairVertical);
-    hideGuide(state.crosshairPrice);
-    hideGuide(state.crosshairSignal);
-  }
-
-  function buildCandleLookup(candles) {
-    const map = new Map();
-    (candles || []).forEach(function (item) {
-      const time = normalizeTime(item.time);
-      if (time !== null) {
-        map.set(time, item);
-      }
-    });
-    return map;
-  }
-
-  function buildSignalLookup(lines) {
-    let source = null;
-    PRIMARY_SIGNAL_IDS.some(function (id) {
-      source = (lines || []).find(function (line) {
-        return line.id === id && Array.isArray(line.data) && line.data.length;
-      });
-      return Boolean(source);
-    });
-    if (!source) {
-      source = (lines || []).find(function (line) {
-        return Array.isArray(line.data) && line.data.length;
-      }) || null;
-    }
-
-    const values = new Map();
-    if (source) {
-      source.data.forEach(function (point) {
-        const time = normalizeTime(point.time);
-        const value = Number(point.value);
-        if (time !== null && Number.isFinite(value)) {
-          values.set(time, value);
-        }
-      });
-    }
-
-    return {
-      id: source ? source.id : null,
-      values: values,
     };
   }
 
@@ -189,18 +107,7 @@
     if (from === null || to === null || !Number.isFinite(from) || !Number.isFinite(to)) {
       return null;
     }
-    if (to < from) {
-      return { from: to, to: from };
-    }
-    return { from: from, to: to };
-  }
-
-  function rangesClose(left, right) {
-    if (!left || !right) {
-      return false;
-    }
-    return Math.abs(Number(left.from) - Number(right.from)) < 0.5 &&
-      Math.abs(Number(left.to) - Number(right.to)) < 0.5;
+    return to < from ? { from: to, to: from } : { from: from, to: to };
   }
 
   function buildDataBounds(candles) {
@@ -239,433 +146,35 @@
       to = bounds.to;
       from = to - span;
     }
-    if (from < bounds.from) {
-      from = bounds.from;
-    }
-    if (to > bounds.to) {
-      to = bounds.to;
-    }
-    return { from: from, to: to };
-  }
-
-  function applyVisibleRange(chart, range) {
-    if (!chart || !chart.timeScale || !range) {
-      return;
-    }
-    const timeScale = chart.timeScale();
-    const current = typeof timeScale.getVisibleRange === "function"
-      ? normalizeRange(timeScale.getVisibleRange())
-      : null;
-    if (current && rangesClose(current, range)) {
-      return;
-    }
-    timeScale.setVisibleRange(range);
-  }
-
-  function releaseRangeSync(state) {
-    if (!state) {
-      return;
-    }
-    if (state.rangeSyncTimer) {
-      clearTimeout(state.rangeSyncTimer);
-    }
-    state.rangeSyncTimer = setTimeout(function () {
-      state.syncingTimeRange = false;
-      state.rangeSyncTimer = null;
-      scheduleOverlayRefresh(state);
-    }, 40);
-  }
-
-  function setSyncedRange(state, range, sourceChart, targetChart) {
-    const clamped = clampRangeToData(state, range);
-    if (!state || !clamped) {
-      return;
-    }
-
-    state.syncingTimeRange = true;
-    try {
-      if (sourceChart) {
-        applyVisibleRange(sourceChart, clamped);
-      }
-      if (targetChart) {
-        applyVisibleRange(targetChart, clamped);
-      }
-    } catch (error) {
-      console.warn("Could not apply chart range", error);
-    }
-    releaseRangeSync(state);
-  }
-
-  function resetChartView(state) {
-    if (!state) {
-      return;
-    }
-    state.syncingTimeRange = true;
-    try {
-      state.priceChart.timeScale().fitContent();
-      state.signalChart.timeScale().fitContent();
-    } catch (error) {
-      console.warn("Could not reset chart view", error);
-    }
-    releaseRangeSync(state);
-  }
-
-  function destroyChartState(state) {
-    if (!state) {
-      return;
-    }
-    if (state.wheelTargets && state.wheelHandler) {
-      state.wheelTargets.forEach(function (target) {
-        if (target) {
-          target.removeEventListener("wheel", state.wheelHandler, false);
-        }
-      });
-    }
-    if (state.resizeObserver) {
-      state.resizeObserver.disconnect();
-    }
-    if (state.overlayFrame) {
-      cancelAnimationFrame(state.overlayFrame);
-    }
-    if (state.rangeSyncTimer) {
-      clearTimeout(state.rangeSyncTimer);
-    }
-    if (state.resetButton && state.resetHandler) {
-      state.resetButton.removeEventListener("click", state.resetHandler);
-    }
-    try {
-      if (state.priceChart && typeof state.priceChart.remove === "function") {
-        state.priceChart.remove();
-      }
-    } catch (error) {
-      console.warn("Could not remove price chart", error);
-    }
-    try {
-      if (state.signalChart && typeof state.signalChart.remove === "function") {
-        state.signalChart.remove();
-      }
-    } catch (error) {
-      console.warn("Could not remove signal chart", error);
-    }
-  }
-
-  function applyChartSizes(state) {
-    if (!state) {
-      return;
-    }
-    if (state.priceHost.clientWidth && state.priceHost.clientHeight) {
-      state.priceChart.applyOptions({
-        width: state.priceHost.clientWidth,
-        height: state.priceHost.clientHeight,
-      });
-    }
-    if (state.signalHost.clientWidth && state.signalHost.clientHeight) {
-      state.signalChart.applyOptions({
-        width: state.signalHost.clientWidth,
-        height: state.signalHost.clientHeight,
-      });
-    }
-  }
-
-  function renderTradePins(state) {
-    if (!state || !state.pinLayer) {
-      return;
-    }
-    const width = state.priceHost.clientWidth;
-    const height = state.priceHost.clientHeight;
-    const selectedTradeNo = normalizeTradeNo(state.selectedTradeNo);
-    const html = [];
-
-    (state.tradePins || []).forEach(function (pin) {
-      const time = normalizeTime(pin.time);
-      const price = Number(pin.price);
-      const x = state.priceChart.timeScale().timeToCoordinate(time);
-      const y = state.candles.priceToCoordinate(price);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        return;
-      }
-      if (x < -40 || x > width + 40 || y < -60 || y > height + 60) {
-        return;
-      }
-
-      const kind = String(pin.kind || "entry").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
-      const decision = String(pin.decision || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
-      const rejectCode = String(pin.rejectCode || "").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
-      const classes = ["tv-trade-pin"];
-      classes.push(pin.anchor === "below" ? "is-below" : "is-above");
-      classes.push("is-" + kind);
-      if (decision) {
-        classes.push("is-" + decision);
-      }
-      if (rejectCode) {
-        classes.push("reject-" + rejectCode);
-      }
-      if (pin.side === "short") {
-        classes.push("is-short");
-      }
-      if (selectedTradeNo !== null && normalizeTradeNo(pin.tradeNo) === selectedTradeNo) {
-        classes.push("is-selected");
-      }
-
-      html.push(
-        '<div class="' + classes.join(" ") + '" style="left:' + Math.round(x) + "px;top:" +
-        Math.round(y) + 'px;--pin-color:' + escapeHtml(pin.color || "#69b7ff") +
-        ';" title="' + escapeHtml(pin.tooltip || pin.label || "") + '">' +
-        "<span>" + escapeHtml(pin.label || "") + "</span></div>"
-      );
-    });
-
-    state.pinLayer.innerHTML = html.join("");
-  }
-
-  function getPriceCrosshairY(state, time) {
-    const candle = state.candleLookup.get(time);
-    if (!candle) {
-      return null;
-    }
-    const close = Number(candle.close);
-    return Number.isFinite(close) ? state.candles.priceToCoordinate(close) : null;
-  }
-
-  function getSignalCrosshairY(state, time) {
-    if (!state.signalLookup.id) {
-      return null;
-    }
-    const series = state.signalLineSeries[state.signalLookup.id];
-    const value = state.signalLookup.values.get(time);
-    if (!series || !Number.isFinite(value) || typeof series.priceToCoordinate !== "function") {
-      return null;
-    }
-    return series.priceToCoordinate(value);
-  }
-
-  function drawCrosshair(state, sourceKey, param) {
-    if (!state || !param || !param.point) {
-      hideCrosshair(state);
-      return;
-    }
-
-    const time = normalizeTime(param.time);
-    if (time === null) {
-      hideCrosshair(state);
-      return;
-    }
-
-    const sourcePane = sourceKey === "signal" ? state.signalPane : state.pricePane;
-    const sourceHeight = sourceKey === "signal" ? state.signalHost.clientHeight : state.priceHost.clientHeight;
-    if (
-      !Number.isFinite(param.point.x) ||
-      !Number.isFinite(param.point.y) ||
-      param.point.x < 0 ||
-      param.point.y < 0 ||
-      param.point.x > sourcePane.clientWidth ||
-      param.point.y > sourceHeight
-    ) {
-      hideCrosshair(state);
-      return;
-    }
-
-    const x = sourcePane.offsetLeft + param.point.x;
-    const priceY = sourceKey === "price" ? param.point.y : getPriceCrosshairY(state, time);
-    const signalY = sourceKey === "signal" ? param.point.y : getSignalCrosshairY(state, time);
-
-    state.lastCrosshair = { sourceKey: sourceKey, time: time, point: { x: param.point.x, y: param.point.y } };
-    showGuide(state.crosshairVertical, "x", x);
-    showGuide(state.crosshairPrice, "y", priceY);
-    showGuide(state.crosshairSignal, "y", signalY);
-  }
-
-  function refreshOverlays(state) {
-    if (!state) {
-      return;
-    }
-    state.overlayFrame = 0;
-    renderTradePins(state);
-    if (state.lastCrosshair) {
-      drawCrosshair(state, state.lastCrosshair.sourceKey, state.lastCrosshair);
-    } else {
-      hideGuide(state.crosshairVertical);
-      hideGuide(state.crosshairPrice);
-      hideGuide(state.crosshairSignal);
-    }
-  }
-
-  function scheduleOverlayRefresh(state) {
-    if (!state || state.overlayFrame) {
-      return;
-    }
-    state.overlayFrame = requestAnimationFrame(function () {
-      refreshOverlays(state);
-    });
-  }
-
-  function linkTimeScales(state) {
-    function mirror(source, target) {
-      if (
-        !source ||
-        !target ||
-        !source.timeScale ||
-        !target.timeScale ||
-        typeof source.timeScale().subscribeVisibleTimeRangeChange !== "function"
-      ) {
-        return;
-      }
-      source.timeScale().subscribeVisibleTimeRangeChange(function (range) {
-        if (state.syncingTimeRange || !range) {
-          scheduleOverlayRefresh(state);
-          return;
-        }
-        setSyncedRange(state, range, source, target);
-        scheduleOverlayRefresh(state);
-      });
-    }
-
-    mirror(state.priceChart, state.signalChart);
-    mirror(state.signalChart, state.priceChart);
-  }
-
-  function subscribeCrosshair(state) {
-    state.priceChart.subscribeCrosshairMove(function (param) {
-      if (!param || param.time === undefined) {
-        hideCrosshair(state);
-        return;
-      }
-      drawCrosshair(state, "price", param);
-    });
-
-    state.signalChart.subscribeCrosshairMove(function (param) {
-      if (!param || param.time === undefined) {
-        hideCrosshair(state);
-        return;
-      }
-      drawCrosshair(state, "signal", param);
-    });
-
-    ["mouseleave", "pointerleave"].forEach(function (eventName) {
-      state.pricePane.addEventListener(eventName, function () {
-        hideCrosshair(state);
-      });
-      state.signalPane.addEventListener(eventName, function () {
-        hideCrosshair(state);
-      });
-    });
-  }
-
-  function bindWheelLock(state) {
-    // Lightweight Charts needs raw wheel events for smooth zooming. CSS
-    // overscroll-behavior keeps the page from stealing the gesture.
-    state.wheelHandler = null;
-    state.wheelTargets = [];
-  }
-
-  function buildChartState(container) {
-    container.innerHTML = [
-      '<button type="button" class="tv-chart-reset" title="Wróć do pełnego zakresu danych">Reset widoku</button>',
-      '<div class="tv-crosshair-v"></div>',
-      '<div class="tv-chart-pane tv-chart-price">',
-      '  <div class="tv-chart-host tv-chart-price-host"></div>',
-      '  <div class="tv-chart-pane-overlay tv-chart-price-overlay">',
-      '    <div class="tv-crosshair-h tv-crosshair-h-price"></div>',
-      '    <div class="tv-trade-pins"></div>',
-      "  </div>",
-      "</div>",
-      '<div class="tv-chart-pane tv-chart-signal">',
-      '  <div class="tv-chart-host tv-chart-signal-host"></div>',
-      '  <div class="tv-chart-pane-overlay tv-chart-signal-overlay">',
-      '    <div class="tv-crosshair-h tv-crosshair-h-signal"></div>',
-      "  </div>",
-      "</div>",
-    ].join("");
-
-    const pricePane = container.querySelector(".tv-chart-price");
-    const signalPane = container.querySelector(".tv-chart-signal");
-    const priceHost = container.querySelector(".tv-chart-price-host");
-    const signalHost = container.querySelector(".tv-chart-signal-host");
-
-    const priceChart = createChart(priceHost);
-    const signalChart = createChart(signalHost, {
-      rightPriceScale: {
-        scaleMargins: { top: 0.08, bottom: 0.08 },
-      },
-    });
-
-    const candles = priceChart.addSeries(LightweightCharts.CandlestickSeries, {
-      upColor: "#22d3aa",
-      downColor: "#ff7a59",
-      wickUpColor: "#22d3aa",
-      wickDownColor: "#ff7a59",
-      borderVisible: false,
-    });
-
-    const state = {
-      container: container,
-      pricePane: pricePane,
-      signalPane: signalPane,
-      priceHost: priceHost,
-      signalHost: signalHost,
-      priceChart: priceChart,
-      signalChart: signalChart,
-      candles: candles,
-      priceLineSeries: {},
-      signalLineSeries: {},
-      markersApi: null,
-      signalMarkersApis: {},
-      resizeObserver: null,
-      resetButton: container.querySelector(".tv-chart-reset"),
-      resetHandler: null,
-      crosshairVertical: container.querySelector(".tv-crosshair-v"),
-      crosshairPrice: container.querySelector(".tv-crosshair-h-price"),
-      crosshairSignal: container.querySelector(".tv-crosshair-h-signal"),
-      pinLayer: container.querySelector(".tv-trade-pins"),
-      tradePins: [],
-      candleLookup: new Map(),
-      signalLookup: { id: null, values: new Map() },
-      selectedTradeNo: null,
-      lastCrosshair: null,
-      overlayFrame: 0,
-      syncingTimeRange: false,
-      rangeSyncTimer: null,
-      dataBounds: null,
-      wheelHandler: null,
-      wheelTargets: [],
+    return {
+      from: Math.max(from, bounds.from),
+      to: Math.min(to, bounds.to),
     };
-
-    state.resetHandler = function () {
-      resetChartView(state);
-    };
-    if (state.resetButton) {
-      state.resetButton.addEventListener("click", state.resetHandler);
-    }
-
-    linkTimeScales(state);
-    subscribeCrosshair(state);
-    bindWheelLock(state);
-
-    const resizeObserver = new ResizeObserver(function () {
-      applyChartSizes(state);
-      scheduleOverlayRefresh(state);
-    });
-    state.resizeObserver = resizeObserver;
-    resizeObserver.observe(container);
-    resizeObserver.observe(pricePane);
-    resizeObserver.observe(signalPane);
-
-    applyChartSizes(state);
-    return state;
   }
 
-  function ensureChart(container) {
-    const current = window.__bee4LightweightChart;
-    if (current && current.container === container) {
-      return current;
-    }
+  function payloadKey(payload) {
+    const candles = payload.candles || [];
+    const first = candles.length ? normalizeTime(candles[0].time) : "";
+    const last = candles.length ? normalizeTime(candles[candles.length - 1].time) : "";
+    return [
+      payload.symbol || "",
+      payload.tf || "",
+      payload.chartView || "",
+      candles.length,
+      first,
+      last,
+      (payload.lines || []).length,
+      (payload.signalLines || []).length,
+      (payload.markers || []).length,
+      (payload.signalMarkers || []).length,
+      (payload.tradePins || []).length,
+      payload.selectedTradeNo || "",
+    ].join("|");
+  }
 
-    if (current) {
-      destroyChartState(current);
-    }
-
-    window.__bee4LightweightChart = buildChartState(container);
-    return window.__bee4LightweightChart;
+  function focusKey(payload) {
+    const range = normalizeRange(payload.focusRange);
+    return range ? [range.from, range.to].join(":") : "";
   }
 
   function lineSeriesOptions(line) {
@@ -683,28 +192,15 @@
     return options;
   }
 
-  function showRenderError(container, error) {
-    console.error("Bee1 chart render failed", error);
-    destroyChartState(window.__bee4LightweightChart);
-    window.__bee4LightweightChart = null;
-    container.innerHTML = [
-      '<div style="padding:18px;color:#ffb454;background:rgba(255,180,84,0.08);border:1px solid rgba(255,180,84,0.22);border-radius:18px;">',
-      "<strong>Nie udalo sie wyrenderowac wykresu.</strong><br>",
-      '<span style="color:#95a6bc;">Odswiez strone przez Ctrl+F5. Jezeli blad wroci, renderer pokaze szczegoly w konsoli przegladarki.</span>',
-      "</div>",
-    ].join("");
-  }
-
-  function syncLineSeries(chart, seriesStore, lines) {
+  function syncLineSeries(chart, seriesStore, lines, paneIndex) {
     const activeIds = new Set();
 
     (lines || []).forEach(function (line) {
       let series = seriesStore[line.id];
       if (!series) {
-        series = chart.addSeries(LightweightCharts.LineSeries, lineSeriesOptions(line));
+        series = chart.addSeries(LightweightCharts.LineSeries, lineSeriesOptions(line), paneIndex);
         seriesStore[line.id] = series;
       }
-
       series.applyOptions(lineSeriesOptions(line));
       series.setData(line.data || []);
       activeIds.add(line.id);
@@ -756,6 +252,277 @@
     });
   }
 
+  function buildSignalLookup(lines) {
+    let source = null;
+    PRIMARY_SIGNAL_IDS.some(function (id) {
+      source = (lines || []).find(function (line) {
+        return line.id === id && Array.isArray(line.data) && line.data.length;
+      });
+      return Boolean(source);
+    });
+    if (!source) {
+      source = (lines || []).find(function (line) {
+        return Array.isArray(line.data) && line.data.length;
+      }) || null;
+    }
+
+    const values = new Map();
+    if (source) {
+      source.data.forEach(function (point) {
+        const time = normalizeTime(point.time);
+        const value = Number(point.value);
+        if (time !== null && Number.isFinite(value)) {
+          values.set(time, value);
+        }
+      });
+    }
+
+    return {
+      id: source ? source.id : null,
+      values: values,
+    };
+  }
+
+  function buildCandleLookup(candles) {
+    const map = new Map();
+    (candles || []).forEach(function (item) {
+      const time = normalizeTime(item.time);
+      if (time !== null) {
+        map.set(time, item);
+      }
+    });
+    return map;
+  }
+
+  function resizeChart(state) {
+    if (!state || !state.host.clientWidth || !state.host.clientHeight) {
+      return;
+    }
+    state.chart.resize(state.host.clientWidth, state.host.clientHeight);
+    const panes = typeof state.chart.panes === "function" ? state.chart.panes() : [];
+    if (panes && panes.length >= 2) {
+      const paneHeight = Math.max(140, Math.floor((state.host.clientHeight - 42) / 2));
+      try {
+        panes[0].setHeight(paneHeight);
+        panes[1].setHeight(paneHeight);
+      } catch (error) {
+        console.warn("Could not resize panes", error);
+      }
+    }
+    scheduleOverlayRefresh(state);
+  }
+
+  function resetChartView(state) {
+    if (!state) {
+      return;
+    }
+    try {
+      state.chart.timeScale().fitContent();
+    } catch (error) {
+      console.warn("Could not reset chart view", error);
+    }
+    scheduleOverlayRefresh(state);
+  }
+
+  function setChartRange(state, range) {
+    const clamped = clampRangeToData(state, range);
+    if (!state || !clamped) {
+      return;
+    }
+    try {
+      state.chart.timeScale().setVisibleRange(clamped);
+    } catch (error) {
+      console.warn("Could not apply chart range", error);
+    }
+    scheduleOverlayRefresh(state);
+  }
+
+  function renderTradePins(state) {
+    if (!state || !state.pinLayer) {
+      return;
+    }
+    const width = state.host.clientWidth;
+    const height = state.host.clientHeight;
+    const selectedTradeNo = normalizeTradeNo(state.selectedTradeNo);
+    const html = [];
+
+    (state.tradePins || []).forEach(function (pin) {
+      const time = normalizeTime(pin.time);
+      const price = Number(pin.price);
+      const x = state.chart.timeScale().timeToCoordinate(time);
+      const y = state.candles.priceToCoordinate(price);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return;
+      }
+      if (x < -50 || x > width + 50 || y < -80 || y > height + 80) {
+        return;
+      }
+
+      const kind = safeClass(pin.kind || "entry") || "entry";
+      const decision = safeClass(pin.decision || "");
+      const rejectCode = safeClass(pin.rejectCode || "");
+      const classes = ["tv-trade-pin"];
+      classes.push(pin.anchor === "below" ? "is-below" : "is-above");
+      classes.push("is-" + kind);
+      if (decision) {
+        classes.push("is-" + decision);
+      }
+      if (rejectCode) {
+        classes.push("reject-" + rejectCode);
+      }
+      if (pin.side === "short") {
+        classes.push("is-short");
+      }
+      if (selectedTradeNo !== null && normalizeTradeNo(pin.tradeNo) === selectedTradeNo) {
+        classes.push("is-selected");
+      }
+
+      html.push(
+        '<div class="' + classes.join(" ") + '" style="left:' + Math.round(x) + "px;top:" +
+        Math.round(y) + 'px;--pin-color:' + escapeHtml(pin.color || "#69b7ff") +
+        ';" title="' + escapeHtml(pin.tooltip || pin.label || "") + '">' +
+        "<span>" + escapeHtml(pin.label || "") + "</span></div>"
+      );
+    });
+
+    state.pinLayer.innerHTML = html.join("");
+  }
+
+  function refreshOverlays(state) {
+    if (!state) {
+      return;
+    }
+    state.overlayFrame = 0;
+    renderTradePins(state);
+  }
+
+  function scheduleOverlayRefresh(state) {
+    if (!state || state.overlayFrame) {
+      return;
+    }
+    state.overlayFrame = requestAnimationFrame(function () {
+      refreshOverlays(state);
+    });
+  }
+
+  function destroyChartState(state) {
+    if (!state) {
+      return;
+    }
+    if (state.resizeObserver) {
+      state.resizeObserver.disconnect();
+    }
+    if (state.overlayFrame) {
+      cancelAnimationFrame(state.overlayFrame);
+    }
+    if (state.resetButton && state.resetHandler) {
+      state.resetButton.removeEventListener("click", state.resetHandler);
+    }
+    try {
+      if (state.chart && typeof state.chart.remove === "function") {
+        state.chart.remove();
+      }
+    } catch (error) {
+      console.warn("Could not remove chart", error);
+    }
+  }
+
+  function buildChartState(container) {
+    container.innerHTML = [
+      '<button type="button" class="tv-chart-reset" title="Wroc do pelnego zakresu danych">Reset widoku</button>',
+      '<div class="tv-chart-host tv-chart-main-host"></div>',
+      '<div class="tv-chart-pane-overlay tv-chart-main-overlay">',
+      '  <div class="tv-trade-pins"></div>',
+      "</div>",
+    ].join("");
+
+    const host = container.querySelector(".tv-chart-main-host");
+    const chart = LightweightCharts.createChart(host, baseChartOptions(host));
+    const candles = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: "#22d3aa",
+      downColor: "#ff7a59",
+      wickUpColor: "#22d3aa",
+      wickDownColor: "#ff7a59",
+      borderVisible: false,
+    }, 0);
+
+    const state = {
+      container: container,
+      host: host,
+      chart: chart,
+      candles: candles,
+      priceLineSeries: {},
+      signalLineSeries: {},
+      markersApi: null,
+      signalMarkersApis: {},
+      resizeObserver: null,
+      resetButton: container.querySelector(".tv-chart-reset"),
+      resetHandler: null,
+      pinLayer: container.querySelector(".tv-trade-pins"),
+      tradePins: [],
+      candleLookup: new Map(),
+      signalLookup: { id: null, values: new Map() },
+      selectedTradeNo: null,
+      dataBounds: null,
+      lastPayloadKey: "",
+      lastFocusKey: "",
+      overlayFrame: 0,
+    };
+
+    state.resetHandler = function () {
+      state.lastFocusKey = "";
+      resetChartView(state);
+    };
+    if (state.resetButton) {
+      state.resetButton.addEventListener("click", state.resetHandler);
+    }
+
+    if (chart.timeScale && typeof chart.timeScale().subscribeVisibleTimeRangeChange === "function") {
+      chart.timeScale().subscribeVisibleTimeRangeChange(function () {
+        scheduleOverlayRefresh(state);
+      });
+    }
+    if (chart.subscribeCrosshairMove) {
+      chart.subscribeCrosshairMove(function () {
+        scheduleOverlayRefresh(state);
+      });
+    }
+
+    const resizeObserver = new ResizeObserver(function () {
+      resizeChart(state);
+    });
+    state.resizeObserver = resizeObserver;
+    resizeObserver.observe(container);
+    resizeObserver.observe(host);
+
+    resizeChart(state);
+    return state;
+  }
+
+  function ensureChart(container) {
+    const current = window.__bee4LightweightChart;
+    if (current && current.container === container) {
+      return current;
+    }
+    if (current) {
+      destroyChartState(current);
+    }
+    window.__bee4LightweightChart = buildChartState(container);
+    return window.__bee4LightweightChart;
+  }
+
+  function showRenderError(container, error) {
+    console.error("Bee4 chart render failed", error);
+    destroyChartState(window.__bee4LightweightChart);
+    window.__bee4LightweightChart = null;
+    container.innerHTML = [
+      '<div style="padding:18px;color:#ffb454;background:rgba(255,180,84,0.08);border:1px solid rgba(255,180,84,0.22);border-radius:18px;">',
+      "<strong>Nie udalo sie wyrenderowac wykresu.</strong><br>",
+      '<span style="color:#95a6bc;">Odswiez strone przez Ctrl+F5. Jezeli blad wroci, renderer pokaze szczegoly w konsoli przegladarki.</span>',
+      "</div>",
+    ].join("");
+  }
+
   function render(payload) {
     const attempt = arguments.length > 1 ? arguments[1] : 0;
     const container = document.getElementById("tv-chart");
@@ -790,12 +557,7 @@
 
     try {
       const state = ensureChart(container);
-      if (
-        !state.priceHost.clientWidth ||
-        !state.priceHost.clientHeight ||
-        !state.signalHost.clientWidth ||
-        !state.signalHost.clientHeight
-      ) {
+      if (!state.host.clientWidth || !state.host.clientHeight) {
         if (attempt < 20) {
           setTimeout(function () {
             render(payload, attempt + 1);
@@ -805,10 +567,15 @@
       }
 
       const candlesData = payload.candles || [];
+      const nextPayloadKey = payloadKey(payload);
+      const nextFocusKey = focusKey(payload);
+      const isNewPayload = state.lastPayloadKey !== nextPayloadKey;
+      const isNewFocus = nextFocusKey && state.lastFocusKey !== nextFocusKey;
+
       state.dataBounds = buildDataBounds(candlesData);
       state.candles.setData(candlesData);
-      syncLineSeries(state.priceChart, state.priceLineSeries, payload.lines || []);
-      syncLineSeries(state.signalChart, state.signalLineSeries, payload.signalLines || []);
+      syncLineSeries(state.chart, state.priceLineSeries, payload.lines || [], 0);
+      syncLineSeries(state.chart, state.signalLineSeries, payload.signalLines || [], 1);
 
       state.candleLookup = buildCandleLookup(candlesData);
       state.signalLookup = buildSignalLookup(payload.signalLines || []);
@@ -821,14 +588,18 @@
       state.markersApi = LightweightCharts.createSeriesMarkers(state.candles, payload.markers || []);
       syncSeriesMarkers(state.signalLineSeries, state.signalMarkersApis, payload.signalMarkers || []);
 
-      applyChartSizes(state);
+      resizeChart(state);
 
-      if (payload.focusRange && payload.focusRange.from && payload.focusRange.to) {
-        setSyncedRange(state, payload.focusRange, state.priceChart, state.signalChart);
-      } else {
+      if (nextFocusKey && payload.focusRange) {
+        if (isNewFocus || isNewPayload) {
+          setChartRange(state, payload.focusRange);
+        }
+      } else if (isNewPayload && !state.lastPayloadKey) {
         resetChartView(state);
       }
 
+      state.lastPayloadKey = nextPayloadKey;
+      state.lastFocusKey = nextFocusKey;
       scheduleOverlayRefresh(state);
     } catch (error) {
       if (attempt < 1) {
@@ -843,7 +614,7 @@
       return "";
     }
 
-    return [payload.symbol || "", payload.tf || "", Date.now()].join(":");
+    return [payload.symbol || "", payload.tf || "", payload.chartView || "", Date.now()].join(":");
   }
 
   window.dash_clientside = Object.assign({}, window.dash_clientside, {
@@ -852,4 +623,3 @@
     },
   });
 })();
-
