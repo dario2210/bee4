@@ -1180,83 +1180,137 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
     return disp
 
 
-def _tradingview_symbol(result_data: dict) -> str:
-    symbol = str(result_data.get("symbol", "") or "").strip().upper()
-    if not symbol:
-        return ""
-    if ":" in symbol:
-        return symbol
-    exchange = str(result_data.get("tv_exchange") or result_data.get("exchange") or "BINANCE").strip().upper()
-    return f"{exchange}:{symbol}"
-
-
-def _tv_time(value) -> str:
-    ts = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(ts):
-        return ""
-    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _tv_number(value, digits: int = 8) -> str:
+def _pine_number(value, digits: int = 8) -> str:
     value = pd.to_numeric(value, errors="coerce")
     if pd.isna(value) or not np.isfinite(float(value)):
-        return ""
+        return "na"
     text = f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
     return text or "0"
 
 
-def _tradingview_transactions_frame(result_data: dict) -> pd.DataFrame:
+def _pine_string(value) -> str:
+    text = str(value or "")
+    text = text.replace("\\", "\\\\").replace('"', '\\"')
+    text = text.replace("\r", " ").replace("\n", " ")
+    return f'"{text}"'
+
+
+def _pine_timestamp(value) -> str | None:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return f'timestamp("UTC",{ts.year},{ts.month},{ts.day},{ts.hour},{ts.minute})'
+
+
+def _pine_trade_add_lines(result_data: dict) -> list[str]:
     trades_df = _normalize_chart_trades(pd.DataFrame(result_data.get("trades", [])))
     if trades_df.empty:
-        return pd.DataFrame()
+        return []
 
-    tv_symbol = _tradingview_symbol(result_data)
-    params = result_data.get("best_params") or result_data.get("params_used") or {}
-    fee_rate = float(params.get("fee_rate", FEE_RATE) or 0.0)
-    rows = []
+    lines: list[str] = []
 
-    for _, trade in trades_df.iterrows():
+    for idx, trade in trades_df.iterrows():
         side = str(trade.get("side", "")).strip().lower()
         if side not in ("long", "short"):
             continue
 
         entry_price = pd.to_numeric(trade.get("entry_price"), errors="coerce")
         exit_price = pd.to_numeric(trade.get("exit_price"), errors="coerce")
-        notional = pd.to_numeric(trade.get("position_notional"), errors="coerce")
-        if pd.isna(notional) or notional <= 0:
-            notional = pd.to_numeric(trade.get("capital_before"), errors="coerce")
-        if pd.isna(notional) or notional <= 0 or pd.isna(entry_price) or entry_price <= 0:
+        entry_ts = _pine_timestamp(trade.get("entry_time"))
+        exit_ts = _pine_timestamp(trade.get("exit_time"))
+        if pd.isna(entry_price) or entry_ts is None:
             continue
 
-        qty = float(notional) / float(entry_price)
-        fee_usd = pd.to_numeric(trade.get("fee_usd"), errors="coerce")
-        entry_commission = float(fee_usd) / 2.0 if pd.notna(fee_usd) else float(notional) * fee_rate
-        exit_notional = qty * float(exit_price) if pd.notna(exit_price) and exit_price > 0 else float(notional)
-        exit_commission = float(fee_usd) / 2.0 if pd.notna(fee_usd) else exit_notional * fee_rate
+        try:
+            trade_no = int(float(trade.get("trade_no", idx + 1)))
+        except Exception:
+            trade_no = int(idx) + 1
+        pnl = _pine_number(trade.get("pnl", 0.0), 8)
+        direction = side.upper()
+        entry_action, exit_action = ("BUY", "SELL") if side == "long" else ("SELL", "BUY")
+        entry_comment = f"T{trade_no} ENTRY {direction} {entry_action}"
+        exit_comment = f"T{trade_no} EXIT {direction} {exit_action}"
 
-        entry_side, exit_side = ("buy", "sell") if side == "long" else ("sell", "buy")
-        rows.append({
-            "Symbol": tv_symbol,
-            "Side": entry_side,
-            "Qty": _tv_number(qty, 8),
-            "Status": "Filled",
-            "Fill Price": _tv_number(entry_price, 8),
-            "Commission": _tv_number(entry_commission, 8),
-            "Closing Time": _tv_time(trade.get("entry_time")),
-        })
-        if pd.notna(exit_price) and exit_price > 0 and _tv_time(trade.get("exit_time")):
-            rows.append({
-                "Symbol": tv_symbol,
-                "Side": exit_side,
-                "Qty": _tv_number(qty, 8),
-                "Status": "Filled",
-                "Fill Price": _tv_number(exit_price, 8),
-                "Commission": _tv_number(exit_commission, 8),
-                "Closing Time": _tv_time(trade.get("exit_time")),
-            })
+        lines.append(
+            f"    f_add({entry_ts},{_pine_string(entry_action)},{_pine_number(entry_price, 8)},"
+            f"{trade_no},{_pine_string(entry_comment)},{pnl})"
+        )
+        if pd.notna(exit_price) and exit_ts is not None:
+            lines.append(
+                f"    f_add({exit_ts},{_pine_string(exit_action)},{_pine_number(exit_price, 8)},"
+                f"{trade_no},{_pine_string(exit_comment)},{pnl})"
+            )
 
-    columns = ["Symbol", "Side", "Qty", "Status", "Fill Price", "Commission", "Closing Time"]
-    return pd.DataFrame(rows, columns=columns)
+    return lines
+
+
+def _build_pine_trades_overlay(result_data: dict) -> str:
+    symbol = str(result_data.get("symbol", "asset") or "asset").upper()
+    tf = str(result_data.get("tf", "tf") or "tf")
+    mode = str(result_data.get("mode", "run") or "run").upper()
+    add_lines = _pine_trade_add_lines(result_data)
+    generated = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    n_events = len(add_lines)
+    n_trades = len(result_data.get("trades", []) or [])
+    events_block = "\n".join(add_lines) if add_lines else "    // No trades available"
+
+    return f"""//@version=5
+indicator("BEE4 Trades Overlay with Trade Numbers", overlay=true, max_labels_count=500)
+
+// Generated by BEE4 dashboard: {generated}
+// Source: {symbol} {tf} {mode}, trades: {n_trades}, events: {n_events}
+
+showLabels = input.bool(true, "Pokaz etykiety z numerem transakcji")
+showPrice = input.bool(false, "Pokaz cene w etykiecie")
+showPnl = input.bool(false, "Pokaz PnL w etykiecie")
+showMarkers = input.bool(true, "Pokaz trojkaty BUY/SELL")
+maxLabelsToDraw = input.int(500, "Maks. etykiet", minval=0, maxval=500)
+
+var int[] txTime = array.new_int()
+var string[] txAction = array.new_string()
+var float[] txPrice = array.new_float()
+var int[] txTradeNo = array.new_int()
+var string[] txComment = array.new_string()
+var float[] txPnl = array.new_float()
+var bool[] drawn = array.new_bool()
+var int labelsDrawn = 0
+
+f_add(_t, _action, _price, _tradeNo, _comment, _pnl) =>
+    array.push(txTime, _t)
+    array.push(txAction, _action)
+    array.push(txPrice, _price)
+    array.push(txTradeNo, _tradeNo)
+    array.push(txComment, _comment)
+    array.push(txPnl, _pnl)
+    array.push(drawn, false)
+
+if barstate.isfirst
+{events_block}
+
+buyOnBar = false
+sellOnBar = false
+
+if array.size(txTime) > 0
+    for i = 0 to array.size(txTime) - 1
+        t = array.get(txTime, i)
+        inBar = time <= t and t < time_close
+        if inBar
+            action = array.get(txAction, i)
+            price = array.get(txPrice, i)
+            comment = array.get(txComment, i)
+            pnl = array.get(txPnl, i)
+            isBuy = action == "BUY"
+            buyOnBar := buyOnBar or isBuy
+            sellOnBar := sellOnBar or not isBuy
+            if showLabels and not array.get(drawn, i) and labelsDrawn < maxLabelsToDraw
+                txt = comment + (showPrice ? "\\n" + str.tostring(price, format.mintick) : "") + (showPnl ? "\\nPnL: " + str.tostring(pnl, "#.##") : "")
+                label.new(x=bar_index, y=isBuy ? low : high, text=txt, xloc=xloc.bar_index, yloc=isBuy ? yloc.belowbar : yloc.abovebar, style=isBuy ? label.style_label_up : label.style_label_down, color=isBuy ? color.lime : color.red, textcolor=color.white, size=size.small, tooltip=comment)
+                array.set(drawn, i, true)
+                labelsDrawn := labelsDrawn + 1
+
+plotshape(showMarkers and buyOnBar, title="BUY", style=shape.triangleup, location=location.belowbar, size=size.tiny, color=color.lime, text="BUY")
+plotshape(showMarkers and sellOnBar, title="SELL", style=shape.triangledown, location=location.abovebar, size=size.tiny, color=color.red, text="SELL")
+"""
 
 
 def _serialize_trade_record(trade_row: pd.Series | dict) -> dict:
@@ -2445,7 +2499,7 @@ def main_panel():
         dcc.Store(id="store-chart-payload",  data=None),
         dcc.Store(id="store-server-token",   data=None, storage_type="session"),
         dcc.Download(id="download-trades"),
-        dcc.Download(id="download-tv-trades"),
+        dcc.Download(id="download-pine-trades"),
         dcc.Download(id="download-report"),
         html.Div(id="chart-render-signal", style={"display":"none"}),
         dcc.Interval(id="poll",interval=15000,n_intervals=0),
@@ -2979,25 +3033,25 @@ def export_trades(n_clicks, result_data):
 
 
 @app.callback(
-    Output("download-tv-trades", "data"),
-    Input("btn-export-tv-trades", "n_clicks"),
+    Output("download-pine-trades", "data"),
+    Input("btn-export-pine-trades", "n_clicks"),
     State("store-result", "data"),
     prevent_initial_call=True,
 )
-def export_trades_tradingview(n_clicks, result_data):
+def export_trades_pine(n_clicks, result_data):
     if not n_clicks or not result_data:
         return dash.no_update
 
-    export_df = _tradingview_transactions_frame(result_data)
-    if export_df.empty:
+    script = _build_pine_trades_overlay(result_data)
+    if not script.strip():
         return dash.no_update
 
     mode = str(result_data.get("mode", "run")).lower()
     symbol = str(result_data.get("symbol", "asset")).upper()
     tf = str(result_data.get("tf", "tf")).lower()
     stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"bee4_{mode}_{symbol}_{tf}_tradingview_transactions_{stamp}.csv"
-    return dcc.send_data_frame(export_df.to_csv, filename, index=False, encoding="utf-8-sig")
+    filename = f"bee4_{mode}_{symbol}_{tf}_trades_overlay_{stamp}.pine"
+    return dcc.send_string(script, filename)
 
 
 @app.callback(
@@ -3466,10 +3520,10 @@ def render_results(tab, result_data, chart_filter_val, chart_view_val, selected_
                             },
                         ),
                         html.Button(
-                            "Eksport TV",
-                            id="btn-export-tv-trades",
+                            "Eksport Pine",
+                            id="btn-export-pine-trades",
                             n_clicks=0,
-                            title="Eksport do TradingView Portfolio CSV",
+                            title="Eksport Pine Script z markerami transakcji",
                             style={
                                 "background": C["blue"],
                                 "color": "#07111b",
