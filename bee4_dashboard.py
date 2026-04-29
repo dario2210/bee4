@@ -1180,6 +1180,85 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
     return disp
 
 
+def _tradingview_symbol(result_data: dict) -> str:
+    symbol = str(result_data.get("symbol", "") or "").strip().upper()
+    if not symbol:
+        return ""
+    if ":" in symbol:
+        return symbol
+    exchange = str(result_data.get("tv_exchange") or result_data.get("exchange") or "BINANCE").strip().upper()
+    return f"{exchange}:{symbol}"
+
+
+def _tv_time(value) -> str:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return ""
+    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _tv_number(value, digits: int = 8) -> str:
+    value = pd.to_numeric(value, errors="coerce")
+    if pd.isna(value) or not np.isfinite(float(value)):
+        return ""
+    text = f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _tradingview_transactions_frame(result_data: dict) -> pd.DataFrame:
+    trades_df = _normalize_chart_trades(pd.DataFrame(result_data.get("trades", [])))
+    if trades_df.empty:
+        return pd.DataFrame()
+
+    tv_symbol = _tradingview_symbol(result_data)
+    params = result_data.get("best_params") or result_data.get("params_used") or {}
+    fee_rate = float(params.get("fee_rate", FEE_RATE) or 0.0)
+    rows = []
+
+    for _, trade in trades_df.iterrows():
+        side = str(trade.get("side", "")).strip().lower()
+        if side not in ("long", "short"):
+            continue
+
+        entry_price = pd.to_numeric(trade.get("entry_price"), errors="coerce")
+        exit_price = pd.to_numeric(trade.get("exit_price"), errors="coerce")
+        notional = pd.to_numeric(trade.get("position_notional"), errors="coerce")
+        if pd.isna(notional) or notional <= 0:
+            notional = pd.to_numeric(trade.get("capital_before"), errors="coerce")
+        if pd.isna(notional) or notional <= 0 or pd.isna(entry_price) or entry_price <= 0:
+            continue
+
+        qty = float(notional) / float(entry_price)
+        fee_usd = pd.to_numeric(trade.get("fee_usd"), errors="coerce")
+        entry_commission = float(fee_usd) / 2.0 if pd.notna(fee_usd) else float(notional) * fee_rate
+        exit_notional = qty * float(exit_price) if pd.notna(exit_price) and exit_price > 0 else float(notional)
+        exit_commission = float(fee_usd) / 2.0 if pd.notna(fee_usd) else exit_notional * fee_rate
+
+        entry_side, exit_side = ("buy", "sell") if side == "long" else ("sell", "buy")
+        rows.append({
+            "Symbol": tv_symbol,
+            "Side": entry_side,
+            "Qty": _tv_number(qty, 8),
+            "Status": "Filled",
+            "Fill Price": _tv_number(entry_price, 8),
+            "Commission": _tv_number(entry_commission, 8),
+            "Closing Time": _tv_time(trade.get("entry_time")),
+        })
+        if pd.notna(exit_price) and exit_price > 0 and _tv_time(trade.get("exit_time")):
+            rows.append({
+                "Symbol": tv_symbol,
+                "Side": exit_side,
+                "Qty": _tv_number(qty, 8),
+                "Status": "Filled",
+                "Fill Price": _tv_number(exit_price, 8),
+                "Commission": _tv_number(exit_commission, 8),
+                "Closing Time": _tv_time(trade.get("exit_time")),
+            })
+
+    columns = ["Symbol", "Side", "Qty", "Status", "Fill Price", "Commission", "Closing Time"]
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _serialize_trade_record(trade_row: pd.Series | dict) -> dict:
     data = trade_row.to_dict() if isinstance(trade_row, pd.Series) else dict(trade_row)
     return json.loads(pd.DataFrame([data]).to_json(orient="records", date_format="iso"))[0]
@@ -2366,6 +2445,7 @@ def main_panel():
         dcc.Store(id="store-chart-payload",  data=None),
         dcc.Store(id="store-server-token",   data=None, storage_type="session"),
         dcc.Download(id="download-trades"),
+        dcc.Download(id="download-tv-trades"),
         dcc.Download(id="download-report"),
         html.Div(id="chart-render-signal", style={"display":"none"}),
         dcc.Interval(id="poll",interval=15000,n_intervals=0),
@@ -2899,6 +2979,28 @@ def export_trades(n_clicks, result_data):
 
 
 @app.callback(
+    Output("download-tv-trades", "data"),
+    Input("btn-export-tv-trades", "n_clicks"),
+    State("store-result", "data"),
+    prevent_initial_call=True,
+)
+def export_trades_tradingview(n_clicks, result_data):
+    if not n_clicks or not result_data:
+        return dash.no_update
+
+    export_df = _tradingview_transactions_frame(result_data)
+    if export_df.empty:
+        return dash.no_update
+
+    mode = str(result_data.get("mode", "run")).lower()
+    symbol = str(result_data.get("symbol", "asset")).upper()
+    tf = str(result_data.get("tf", "tf")).lower()
+    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"bee4_{mode}_{symbol}_{tf}_tradingview_transactions_{stamp}.csv"
+    return dcc.send_data_frame(export_df.to_csv, filename, index=False, encoding="utf-8-sig")
+
+
+@app.callback(
     Output("download-report", "data"),
     Output("saved-result-status", "children", allow_duplicate=True),
     Input("btn-report-pdf", "n_clicks"),
@@ -3346,22 +3448,41 @@ def render_results(tab, result_data, chart_filter_val, chart_view_val, selected_
                             style={"fontSize": "11px", "color": C["muted"], "marginTop": "4px"},
                         ),
                     ]),
-                    html.Button(
-                        "Eksport CSV",
-                        id="btn-export-trades",
-                        n_clicks=0,
-                        style={
-                            "background": C["surf2"],
-                            "color": C["text"],
-                            "border": f"1px solid {C['border']}",
-                            "borderRadius": "12px",
-                            "padding": "10px 14px",
-                            "fontSize": "12px",
-                            "fontWeight": "600",
-                            "cursor": "pointer",
-                            "whiteSpace": "nowrap",
-                        },
-                    ),
+                    html.Div([
+                        html.Button(
+                            "Eksport CSV",
+                            id="btn-export-trades",
+                            n_clicks=0,
+                            style={
+                                "background": C["surf2"],
+                                "color": C["text"],
+                                "border": f"1px solid {C['border']}",
+                                "borderRadius": "12px",
+                                "padding": "10px 14px",
+                                "fontSize": "12px",
+                                "fontWeight": "600",
+                                "cursor": "pointer",
+                                "whiteSpace": "nowrap",
+                            },
+                        ),
+                        html.Button(
+                            "Eksport TV",
+                            id="btn-export-tv-trades",
+                            n_clicks=0,
+                            title="Eksport do TradingView Portfolio CSV",
+                            style={
+                                "background": C["blue"],
+                                "color": "#07111b",
+                                "border": "none",
+                                "borderRadius": "12px",
+                                "padding": "10px 14px",
+                                "fontSize": "12px",
+                                "fontWeight": "800",
+                                "cursor": "pointer",
+                                "whiteSpace": "nowrap",
+                            },
+                        ),
+                    ], style={"display": "flex", "gap": "8px", "alignItems": "center"}),
                 ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "gap": "16px", "marginBottom": "10px"}),
                 dash_table.DataTable(
                     id="trades-table",
