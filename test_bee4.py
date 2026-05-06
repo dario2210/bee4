@@ -1,7 +1,7 @@
 """
 test_bee4.py
 ============
-Pytest suite for the BEE4_2 WaveTrend H1 + H4 branch.
+Pytest suite for the BEE4_3 WaveTrend H1 + closed H4 branch.
 """
 
 from __future__ import annotations
@@ -17,6 +17,9 @@ import pytest
 import bee4_binance
 from bee4_binance import interval_to_ms, wfo_bars
 from bee4_data import (
+    compute_wave_trend,
+    htf_prev_wt1_column,
+    htf_prev_wt2_column,
     htf_wt1_column,
     htf_wt2_column,
     load_klines,
@@ -233,6 +236,43 @@ class TestWaveTrendPreparation:
         assert out["wt1"].dropna().shape[0] > 0
         assert out["h4_wt1"].dropna().shape[0] > 0
 
+    def test_h4_values_use_last_closed_h4_candle(self):
+        times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
+        close = 1800.0 + np.linspace(0.0, 120.0, len(times)) + np.sin(np.linspace(0, 12, len(times))) * 25.0
+        df = pd.DataFrame(
+            {
+                "time": times,
+                "open": close,
+                "high": close + 5.0,
+                "low": close - 5.0,
+                "close": close,
+                "volume": 1000.0,
+            }
+        )
+
+        out = prepare_indicators(df)
+        h4_df = (
+            df.set_index("time")
+            .resample("4h")
+            .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+            .dropna()
+            .reset_index()
+        )
+        wt1_h4, wt2_h4 = compute_wave_trend(h4_df, 10, 21, 4)
+        manual_wt1 = pd.Series(wt1_h4.to_numpy(), index=pd.to_datetime(h4_df["time"], utc=True), dtype="float64")
+        manual_wt2 = pd.Series(wt2_h4.to_numpy(), index=pd.to_datetime(h4_df["time"], utc=True), dtype="float64")
+        closed_start = manual_wt2.dropna().index[8]
+        base_time = closed_start + pd.Timedelta("4h")
+
+        window = out[(out["time"] >= base_time) & (out["time"] < base_time + pd.Timedelta("4h"))]
+        assert len(window) == 4
+        assert window["h4_wt1"].nunique() == 1
+        assert window["h4_wt2"].nunique() == 1
+        assert window.iloc[0]["h4_wt1"] == pytest.approx(manual_wt1.loc[closed_start])
+        assert window.iloc[0]["h4_wt2"] == pytest.approx(manual_wt2.loc[closed_start])
+        assert window.iloc[0]["h4_prev_wt1"] == pytest.approx(manual_wt1.shift(1).loc[closed_start])
+        assert window.iloc[0]["h4_prev_wt2"] == pytest.approx(manual_wt2.shift(1).loc[closed_start])
+
 
 class TestEntrySignals:
     def test_open_long_on_h1_green_dot_with_h4_filter(self):
@@ -362,7 +402,7 @@ class TestExitSignals:
         assert sig.action == "close_force"
         assert sig.reason == "WT_H1_RED_DOT_H4_FILTER_EXIT_LONG"
 
-    def test_emergency_exit_long_when_h4_turns_against_position(self):
+    def test_ignore_h4_long_exit_while_h1_remains_below_zero(self):
         prev = _make_bar(
             wt1=-35.0,
             wt2=-42.0,
@@ -374,6 +414,29 @@ class TestExitSignals:
         bar = _make_bar(
             wt1=-32.0,
             wt2=-40.0,
+            h4_wt1=-34.0,
+            h4_wt2=-22.0,
+            h4_prev_wt1=-28.0,
+            h4_prev_wt2=-22.0,
+        )
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "none"
+
+    def test_emergency_exit_long_when_h1_leaves_negative_zone(self):
+        prev = _make_bar(
+            wt1=5.0,
+            wt2=2.0,
+            h4_wt1=-28.0,
+            h4_wt2=-22.0,
+            h4_prev_wt1=-24.0,
+            h4_prev_wt2=-22.0,
+        )
+        bar = _make_bar(
+            wt1=8.0,
+            wt2=3.0,
             h4_wt1=-34.0,
             h4_wt2=-22.0,
             h4_prev_wt1=-28.0,
@@ -416,6 +479,8 @@ class TestBarHelpers:
         wt1_col, wt2_col = wt_columns(10, 21, 4)
         h4_wt1_col = htf_wt1_column(10, 21, "4h")
         h4_wt2_col = htf_wt2_column(10, 21, 4, "4h")
+        h4_prev_wt1_col = htf_prev_wt1_column(10, 21, "4h")
+        h4_prev_wt2_col = htf_prev_wt2_column(10, 21, 4, "4h")
         row = pd.Series(
             {
                 "time": pd.Timestamp("2024-01-01", tz="UTC"),
@@ -427,6 +492,8 @@ class TestBarHelpers:
                 wt2_col: -44.0,
                 h4_wt1_col: -28.0,
                 h4_wt2_col: -22.0,
+                h4_prev_wt1_col: -36.0,
+                h4_prev_wt2_col: -26.0,
                 "h4_prev_wt1": -34.0,
                 "h4_prev_wt2": -22.0,
                 "h4_prev_wt_delta": -12.0,
@@ -443,6 +510,9 @@ class TestBarHelpers:
         assert bar.wt2 == pytest.approx(-44.0)
         assert bar.h4_wt1 == pytest.approx(-28.0)
         assert bar.h4_wt2 == pytest.approx(-22.0)
+        assert bar.h4_prev_wt1 == pytest.approx(-36.0)
+        assert bar.h4_prev_wt2 == pytest.approx(-26.0)
+        assert bar.h4_prev_wt_delta == pytest.approx(-10.0)
         assert bar.ema20 == pytest.approx(95.0)
         assert bar.ema_filter_len == 10
         assert bar.htf_ema200 == pytest.approx(85.0)

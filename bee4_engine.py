@@ -11,7 +11,13 @@ from typing import Literal, Optional
 
 import numpy as np
 
-from bee4_data import htf_wt1_column, htf_wt2_column, wt_columns
+from bee4_data import (
+    htf_prev_wt1_column,
+    htf_prev_wt2_column,
+    htf_wt1_column,
+    htf_wt2_column,
+    wt_columns,
+)
 from bee4_params import WT_ZERO_LINE
 
 Side = Literal["long", "short"]
@@ -136,6 +142,15 @@ def _cross_down(bar: BarData, prev_bar: BarData) -> bool:
 
 def _signal_level(bar: BarData) -> float:
     return min(abs(bar.wt1), abs(bar.wt2))
+
+
+def _h1_below_zero(bar: BarData, zero_line: float) -> bool:
+    return (
+        not np.isnan(bar.wt1)
+        and not np.isnan(bar.wt2)
+        and bar.wt1 < zero_line
+        and bar.wt2 < zero_line
+    )
 
 
 def _has_recent_signal(value: float, max_bars: int) -> bool:
@@ -400,6 +415,8 @@ def generate_exit_signal(
             )
 
     if position.side == "long" and _h4_invalidated(bar, "long", params):
+        if _h1_below_zero(bar, zero_line):
+            return Signal(action="none")
         return Signal(
             action="close_force",
             reason="H4_LONG_INVALIDATION_EXIT",
@@ -455,6 +472,17 @@ def bar_from_row(row, params: dict) -> BarData:
         int(params["wt_signal_len"]),
         h4_interval,
     )
+    h4_prev_wt1_col = htf_prev_wt1_column(
+        int(params["wt_channel_len"]),
+        int(params["wt_avg_len"]),
+        h4_interval,
+    )
+    h4_prev_wt2_col = htf_prev_wt2_column(
+        int(params["wt_channel_len"]),
+        int(params["wt_avg_len"]),
+        int(params["wt_signal_len"]),
+        h4_interval,
+    )
 
     wt1 = row[wt1_col] if wt1_col in row.index else row.get("wt1", np.nan)
     wt2 = row[wt2_col] if wt2_col in row.index else row.get("wt2", np.nan)
@@ -464,6 +492,15 @@ def bar_from_row(row, params: dict) -> BarData:
     h4_wt2 = row[h4_wt2_col] if h4_wt2_col in row.index else row.get("h4_wt2", np.nan)
     h4_wt1 = float(h4_wt1) if not np.isnan(h4_wt1) else np.nan
     h4_wt2 = float(h4_wt2) if not np.isnan(h4_wt2) else np.nan
+    h4_prev_wt1 = row[h4_prev_wt1_col] if h4_prev_wt1_col in row.index else row.get("h4_prev_wt1", np.nan)
+    h4_prev_wt2 = row[h4_prev_wt2_col] if h4_prev_wt2_col in row.index else row.get("h4_prev_wt2", np.nan)
+    h4_prev_wt1 = _float_or_nan(h4_prev_wt1)
+    h4_prev_wt2 = _float_or_nan(h4_prev_wt2)
+    h4_prev_wt_delta = (
+        h4_prev_wt1 - h4_prev_wt2
+        if not np.isnan(h4_prev_wt1) and not np.isnan(h4_prev_wt2)
+        else _float_or_nan(row.get("h4_prev_wt_delta", np.nan))
+    )
     bars_since_wt_green_dot = row.get("bars_since_wt_green_dot", np.nan)
     bars_since_wt_red_dot = row.get("bars_since_wt_red_dot", np.nan)
     ema_filter_len = int(params.get("wt_ema_filter_len", 20) or 20)
@@ -482,9 +519,9 @@ def bar_from_row(row, params: dict) -> BarData:
         h4_wt1=h4_wt1,
         h4_wt2=h4_wt2,
         h4_wt_delta=float(h4_wt1 - h4_wt2) if not np.isnan(h4_wt1) and not np.isnan(h4_wt2) else np.nan,
-        h4_prev_wt1=_float_or_nan(row.get("h4_prev_wt1", np.nan)),
-        h4_prev_wt2=_float_or_nan(row.get("h4_prev_wt2", np.nan)),
-        h4_prev_wt_delta=_float_or_nan(row.get("h4_prev_wt_delta", np.nan)),
+        h4_prev_wt1=h4_prev_wt1,
+        h4_prev_wt2=h4_prev_wt2,
+        h4_prev_wt_delta=h4_prev_wt_delta,
         ema20=_float_or_nan(ema_filter_value),
         ema_filter_len=ema_filter_len,
         htf_ema200=_float_or_nan(row.get("htf_ema200", np.nan)),

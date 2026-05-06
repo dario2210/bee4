@@ -13,7 +13,7 @@ RUN mkdir -p /app/data /app/results
 
 ENV PYTHONPATH=/app
 
-EXPOSE 8064
+EXPOSE 8068
 
-CMD ["python", "bee4_dashboard.py", "--host", "0.0.0.0", "--port", "8064"]
+CMD ["python", "bee4_dashboard.py", "--host", "0.0.0.0", "--port", "8068"]
 

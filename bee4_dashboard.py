@@ -1,5 +1,5 @@
 ﻿"""
-bee4_dashboard.py  –  Bee4 WaveTrend Dashboard  http://IP:8064
+bee4_dashboard.py  -  Bee4_3 WaveTrend Dashboard  http://IP:8068
 """
 from __future__ import annotations
 import argparse, datetime as _dt, io, json, os, threading
@@ -469,10 +469,10 @@ def hero_banner() -> html.Div:
     return html.Div([
         html.Div([
             html.Div("TradingView open source", className="hero-eyebrow"),
-            html.H2("Bee4 WaveTrend console"),
+            html.H2("Bee4_3 WaveTrend console"),
             html.P(
-                "Bee4 zachowuje dashboard bee1, ale w galezi BEE4_2 pracuje jako "
-                "WaveTrend H1 z natychmiastowym wejsciem na kropce oraz filtrem WT liczonym z H4."
+                "Bee4_3 zachowuje dashboard bee1, ale uzywa tylko ostatniej zamknietej swiecy H4 "
+                "oraz chroni longa przed awaryjnym wyjsciem H4, gdy H1 nadal jest ponizej zera."
             ),
         ], className="hero-copy"),
         html.Div([
@@ -2306,7 +2306,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_2: wejście jest od razu na świeżej kropce H1 w głębokiej strefie WT, a filtr robią dwie linie WaveTrend z H4. Stop loss, re-entry i filtry EMA są wyłączone, a awaryjny exit zamyka pozycję gdy H4 zaczyna przeczyć setupowi.",
+                "BEE4_3: wejście jest od razu na świeżej kropce H1 w głębokiej strefie WT, a filtr robią dwie linie WaveTrend z ostatniej zamkniętej świecy H4. Stop loss, re-entry i filtry EMA są wyłączone.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2405,7 +2405,7 @@ def sidebar():
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "WFO w BEE4_2 testuje głębokość wejścia H1, osobne progi H4 dla long/short oraz klasyczne długości WaveTrend. Awaryjny exit H4 jest stały i włączony.",
+                "WFO w BEE4_3 testuje głębokość wejścia H1, osobne progi H4 dla long/short oraz klasyczne długości WaveTrend. Awaryjny exit H4 dla longa nie działa, gdy H1 WT1/WT2 nadal są poniżej zera i nie ma pełnego short signal.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2510,7 +2510,7 @@ def main_panel():
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = dash.Dash(
     __name__,
-    title="Bee4 WaveTrend Dashboard",
+    title="Bee4_3 WaveTrend Dashboard",
     suppress_callback_exceptions=True,
     external_scripts=[
         "https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js",
@@ -4040,11 +4040,11 @@ def render_results(tab, result_data, chart_filter_val, chart_view_val, selected_
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--port", type=int, default=8064)
+    p.add_argument("--port", type=int, default=8068)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--debug", action="store_true")
     a = p.parse_args()
-    print(f"\n{'='*50}\n  Bee4 WaveTrend Dashboard  →  http://{a.host}:{a.port}\n{'='*50}\n")
+    print(f"\n{'='*50}\n  Bee4_3 WaveTrend Dashboard  ->  http://{a.host}:{a.port}\n{'='*50}\n")
     app.run(host=a.host, port=a.port, debug=a.debug)
 
 
