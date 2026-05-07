@@ -121,7 +121,7 @@ def build_position_state(
         entry_atr = float(bar.atr)
     elif side == "long" and bool(params.get("wt_long_emergency_sl_enabled", True)):
         emergency_pct = float(
-            params.get("wt_long_emergency_sl_capital_pct", params.get("wt_long_emergency_sl_pct", 0.01)) or 0.0
+            params.get("wt_long_emergency_sl_capital_pct", params.get("wt_long_emergency_sl_pct", 0.02)) or 0.0
         )
         if emergency_pct > 0.0:
             stop_price = entry_price * (1.0 - emergency_pct)
@@ -371,7 +371,7 @@ def generate_emergency_exit_signal(
 
     emergency_sl_enabled = bool(params.get("wt_long_emergency_sl_enabled", True))
     emergency_capital_pct = float(
-        params.get("wt_long_emergency_sl_capital_pct", params.get("wt_long_emergency_sl_pct", 0.01)) or 0.0
+        params.get("wt_long_emergency_sl_capital_pct", params.get("wt_long_emergency_sl_pct", 0.02)) or 0.0
     )
     remaining_fraction = max(float(position.remaining_fraction), 1e-9)
     emergency_price_pct = emergency_capital_pct / remaining_fraction
@@ -387,7 +387,7 @@ def generate_emergency_exit_signal(
 
     return Signal(
         action="close_force",
-        reason="LONG_EMERGENCY_SL_1PCT",
+        reason="LONG_EMERGENCY_SL_CAPITAL",
         exit_price=emergency_stop,
         meta={
             "exit_wt1": round(bar.wt1, 4),
@@ -395,7 +395,7 @@ def generate_emergency_exit_signal(
             "exit_delta": round(bar.wt_delta, 4),
             "exit_signal_level": round(_signal_level(bar), 4),
             "bars_in_position": position.bars_in_position,
-            "exit_trigger": "LONG_EMERGENCY_SL_1PCT",
+            "exit_trigger": "LONG_EMERGENCY_SL_CAPITAL",
             "stop_price": round(emergency_stop, 4),
             "emergency_sl_capital_pct": emergency_capital_pct,
             "emergency_sl_price_pct": emergency_price_pct,

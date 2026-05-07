@@ -26,6 +26,7 @@ from bee4_params import (
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
     WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
+    WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -267,6 +268,7 @@ def _strategy_params_from_controls(
     h4_long_filter,
     h4_short_filter,
     long_tp1_pct,
+    long_emergency_sl_capital_pct,
     fee_rate: float,
     slippage_bps: float,
 ) -> dict:
@@ -310,7 +312,14 @@ def _strategy_params_from_controls(
             "wt_long_tp2_pct": float(DEFAULT_PARAMS.get("wt_long_tp2_pct", 0.02)),
             "wt_long_tp2_fraction": float(DEFAULT_PARAMS.get("wt_long_tp2_fraction", 1.0 / 3.0)),
             "wt_long_emergency_sl_enabled": True,
-            "wt_long_emergency_sl_capital_pct": float(DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.01)),
+            "wt_long_emergency_sl_capital_pct": float(
+                (
+                    long_emergency_sl_capital_pct
+                    if long_emergency_sl_capital_pct not in (None, "")
+                    else DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.02) * 100.0
+                )
+            )
+            / 100.0,
             "wt_short_tp1_enabled": True,
             "wt_short_tp1_pct": float(
                 (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01) * 100.0)
@@ -341,6 +350,7 @@ def _grid_overrides_from_controls(
     short_zone_grid,
     h4_long_filter_grid,
     h4_short_filter_grid,
+    long_emergency_sl_capital_pct_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -363,6 +373,11 @@ def _grid_overrides_from_controls(
             float,
         ),
         "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
+        "wt_long_emergency_sl_capital_pct": _clean_selected_values(
+            long_emergency_sl_capital_pct_grid,
+            WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
+            float,
+        ),
     }
 
 
@@ -400,10 +415,12 @@ PARAM_SUMMARY_LABELS = {
 }
 
 
-def _format_param_value(value):
+def _format_param_value(value, key: str | None = None):
     if isinstance(value, bool):
         return "On" if value else "Off"
     if isinstance(value, float):
+        if key and key.endswith("_pct"):
+            return f"{value * 100.0:.2f}%"
         return round(value, 4)
     return value
 
@@ -419,7 +436,7 @@ def _params_table_frame(params: dict | None) -> pd.DataFrame:
         rows.append(
             {
                 "parametr": PARAM_SUMMARY_LABELS.get(key, key),
-                "wartość": _format_param_value(params[key]),
+                "wartość": _format_param_value(params[key], key),
             }
         )
 
@@ -527,6 +544,7 @@ def fig_pdist(wd):
     specs = [
         ("best_wt_long_entry_max_above_zero", "Long zone H1", C["green"]),
         ("best_wt_h4_long_filter_max", "Long filter H4", C["purple"]),
+        ("best_wt_long_emergency_sl_capital_pct", "Emergency SL kapitału", C["red"]),
     ]
     rows = max(1, (len(specs) + 1) // 2)
     fig = make_subplots(
@@ -2334,6 +2352,13 @@ def sidebar():
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
+            html.Div([field("Awaryjny SL kapitału %", inp(
+                "inp-bt-long-emergency-sl-capital-pct",
+                round(DEFAULT_PARAMS["wt_long_emergency_sl_capital_pct"] * 100.0, 2),
+                type="number",
+                min=0,
+                step=0.1,
+            ))]),
             html.Div([
                 html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
@@ -2349,7 +2374,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_3: short jest wyłączony. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Awaryjny SL zamyka resztę, gdy strata aktywnej części pozycji przekroczy 1% kapitału. Reszta wychodzi po pierwszej czerwonej kropce H1, gdy linie H4 się zbliżają.",
+                "BEE4_3: short jest wyłączony. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Awaryjny SL zamyka resztę, gdy strata aktywnej części pozycji przekroczy ustawiony procent kapitału. Reszta wychodzi po pierwszej czerwonej kropce H1, gdy linie H4 się zbliżają.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2449,6 +2474,15 @@ def sidebar():
                 value=WT_H4_LONG_FILTER_MAX_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Awaryjny SL kapitału"),
+            dcc.Checklist(id="chk-grid-long-emergency-sl-capital-pct",
+                options=[
+                    {"label": f" {v * 100.0:.1f}%", "value": v}
+                    for v in WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS
+                ],
+                value=WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div([
                 sec("Short filter H4"),
                 dcc.Checklist(id="chk-grid-h4-short",
@@ -2458,7 +2492,7 @@ def sidebar():
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             html.Div(
-                "WFO w BEE4_3 testuje tylko long: głębokość wejścia H1 oraz próg H4 dla longa. Short jest wyłączony i nie mnoży kombinacji. TP1/TP2 są stałe: po 1/3 pozycji przy +1% i +2%, awaryjny SL: strata 1% kapitału.",
+                "WFO w BEE4_3 testuje tylko long: głębokość wejścia H1, próg H4 dla longa oraz awaryjny SL kapitału. Short jest wyłączony i nie mnoży kombinacji. TP1/TP2 są stałe: po 1/3 pozycji przy +1% i +2%.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2739,6 +2773,7 @@ def _worker(
     bt_h4_long,
     bt_h4_short,
     bt_long_tp1_pct,
+    bt_long_emergency_sl_capital_pct,
     grid_channel,
     grid_avg,
     grid_signal,
@@ -2751,6 +2786,7 @@ def _worker(
     grid_short_zone,
     grid_h4_long,
     grid_h4_short,
+    grid_long_emergency_sl_capital_pct,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -2817,6 +2853,7 @@ def _worker(
             bt_h4_long,
             bt_h4_short,
             bt_long_tp1_pct,
+            bt_long_emergency_sl_capital_pct,
             fee_rate_val,
             slip_bps_val,
         )
@@ -2873,6 +2910,7 @@ def _worker(
             grid_short_zone,
             grid_h4_long,
             grid_h4_short,
+            grid_long_emergency_sl_capital_pct,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3211,6 +3249,7 @@ def load_saved_result(n_clicks, filename):
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
     State("inp-bt-h4-long","value"), State("inp-bt-h4-short","value"),
     State("inp-bt-long-tp1-pct","value"),
+    State("inp-bt-long-emergency-sl-capital-pct","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
@@ -3218,6 +3257,7 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     State("chk-grid-h4-long","value"), State("chk-grid-h4-short","value"),
+    State("chk-grid-long-emergency-sl-capital-pct","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3225,10 +3265,10 @@ def on_run_stop(nr, ns,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-    bt_long_tp1_pct,
+    bt_long_tp1_pct, bt_long_emergency_sl_capital_pct,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-    grid_h4_long, grid_h4_short):
+    grid_h4_long, grid_h4_short, grid_long_emergency_sl_capital_pct):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3252,10 +3292,10 @@ def on_run_stop(nr, ns,
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-            bt_long_tp1_pct,
+            bt_long_tp1_pct, bt_long_emergency_sl_capital_pct,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-            grid_h4_long, grid_h4_short,
+            grid_h4_long, grid_h4_short, grid_long_emergency_sl_capital_pct,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

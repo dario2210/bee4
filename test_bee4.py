@@ -70,7 +70,7 @@ BASE_PARAMS = {
     "wt_long_tp2_pct": 0.02,
     "wt_long_tp2_fraction": 1.0 / 3.0,
     "wt_long_emergency_sl_enabled": True,
-    "wt_long_emergency_sl_capital_pct": 0.01,
+    "wt_long_emergency_sl_capital_pct": 0.02,
     "wt_short_tp1_enabled": True,
     "wt_short_tp1_pct": 0.01,
     "wt_short_tp1_fraction": 1.0 / 3.0,
@@ -452,22 +452,22 @@ class TestExitSignals:
 
         assert sig.action == "none"
 
-    def test_long_emergency_stop_closes_remaining_position_at_one_percent_loss(self):
+    def test_long_emergency_stop_closes_remaining_position_at_two_percent_capital_loss(self):
         prev = _make_bar(wt1=-35.0, wt2=-40.0)
         bar = _make_bar(wt1=-34.0, wt2=-39.0)
-        bar.low = 1780.0
+        bar.low = 1760.0
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
 
         sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
 
         assert sig.action == "close_force"
-        assert sig.reason == "LONG_EMERGENCY_SL_1PCT"
-        assert sig.exit_price == pytest.approx(1782.0)
+        assert sig.reason == "LONG_EMERGENCY_SL_CAPITAL"
+        assert sig.exit_price == pytest.approx(1764.0)
 
     def test_long_emergency_stop_closes_only_remaining_fraction_after_tps(self):
         prev = _make_bar(wt1=-35.0, wt2=-40.0)
         bar = _make_bar(wt1=-34.0, wt2=-39.0)
-        bar.low = 1740.0
+        bar.low = 1680.0
         pos = PositionState(
             side="long",
             entry_price=1800.0,
@@ -480,10 +480,10 @@ class TestExitSignals:
         sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
 
         assert sig.action == "close_force"
-        assert sig.reason == "LONG_EMERGENCY_SL_1PCT"
-        assert sig.exit_price == pytest.approx(1746.0)
-        assert sig.meta["emergency_sl_capital_pct"] == pytest.approx(0.01)
-        assert sig.meta["emergency_sl_price_pct"] == pytest.approx(0.03)
+        assert sig.reason == "LONG_EMERGENCY_SL_CAPITAL"
+        assert sig.exit_price == pytest.approx(1692.0)
+        assert sig.meta["emergency_sl_capital_pct"] == pytest.approx(0.02)
+        assert sig.meta["emergency_sl_price_pct"] == pytest.approx(0.06)
 
     def test_long_emergency_stop_on_remaining_third_does_not_trigger_at_one_percent_price_drop(self):
         prev = _make_bar(wt1=-35.0, wt2=-40.0)
@@ -869,13 +869,13 @@ class TestBacktestAccounting:
     def test_emergency_stop_has_priority_over_tp_on_same_bar(self):
         df = _signal_df()
         df.loc[2, "high"] = 1850.0
-        df.loc[2, "low"] = 1780.0
+        df.loc[2, "low"] = 1760.0
         params = dict(LONG_ONLY_PARAMS, fee_rate=0.0, slippage_bps=0.0, spread_bps=0.0)
         strat = Bee4Strategy(params, fee_rate=0.0)
 
         trades, _equity, final_cap = strat.run(df, 9_000.0)
 
-        assert trades.iloc[0]["reason"] == "LONG_EMERGENCY_SL_1PCT"
+        assert trades.iloc[0]["reason"] == "LONG_EMERGENCY_SL_CAPITAL"
         assert trades.iloc[0]["close_fraction"] == pytest.approx(1.0)
         assert len(trades) == 1
         assert final_cap < 9_000.0
