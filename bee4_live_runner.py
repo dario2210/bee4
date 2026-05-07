@@ -68,6 +68,9 @@ def load_state() -> dict:
             "remaining_fraction": 1.0,
             "tp1_taken": False,
             "h1_red_close_count": 0,
+            "h1_green_close_count": 0,
+            "trade_id": 0,
+            "next_trade_id": 1,
             "last_bar_time": None,
             "daily_loss_usd": 0.0,
             "daily_date": None,
@@ -131,6 +134,8 @@ def position_from_state(state: dict) -> Optional[PositionState]:
         remaining_fraction=float(state.get("remaining_fraction", 1.0)),
         tp1_taken=bool(state.get("tp1_taken", False)),
         h1_red_close_count=int(state.get("h1_red_close_count", 0)),
+        h1_green_close_count=int(state.get("h1_green_close_count", 0)),
+        trade_id=int(state.get("trade_id", 0)),
     )
 
 
@@ -146,6 +151,8 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["remaining_fraction"] = 1.0
         state["tp1_taken"] = False
         state["h1_red_close_count"] = 0
+        state["h1_green_close_count"] = 0
+        state["trade_id"] = 0
     else:
         state["position"] = pos.side
         state["entry_price"] = pos.entry_price
@@ -156,6 +163,8 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["remaining_fraction"] = pos.remaining_fraction
         state["tp1_taken"] = pos.tp1_taken
         state["h1_red_close_count"] = pos.h1_red_close_count
+        state["h1_green_close_count"] = pos.h1_green_close_count
+        state["trade_id"] = pos.trade_id
 
 
 def execute_order(
@@ -232,6 +241,8 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
         state["capital"] = capital
 
         remaining_after = max(0.0, position.remaining_fraction - close_fraction)
+        trade_event = "TP" if sig.action == "close_partial" else "EXIT"
+        trade_id = int(position.trade_id or 0)
         trade_log = {
             "ts": bar_time_str,
             "side": position.side,
@@ -247,6 +258,9 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
             "position_notional": close_notional,
             "close_fraction": close_fraction,
             "remaining_fraction_after": remaining_after,
+            "logical_trade_no": trade_id,
+            "trade_event": trade_event,
+            "trade_label": f"{trade_id} {trade_event}".strip(),
             "mode": mode,
         }
         log_trade(trade_log)
@@ -297,6 +311,9 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
                 params=params,
                 entry_meta=entry_meta,
             )
+            trade_id = int(state.get("next_trade_id", 1) or 1)
+            new_pos.trade_id = trade_id
+            state["next_trade_id"] = trade_id + 1
             new_pos.entry_meta["entry_stop_price"] = (
                 round(new_pos.stop_price, 4) if not np.isnan(new_pos.stop_price) else np.nan
             )

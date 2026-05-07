@@ -26,7 +26,6 @@ from bee4_params import (
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
     WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
-    WT_H4_LONG_CLOSE_ZONE_GRID, WT_H4_LONG_CLOSE_ZONE_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -271,7 +270,6 @@ def _strategy_params_from_controls(
     short_zone,
     h4_long_filter,
     h4_short_filter,
-    h4_long_close_zone,
     long_tp1_pct,
     fee_rate: float,
     slippage_bps: float,
@@ -306,15 +304,16 @@ def _strategy_params_from_controls(
             "wt_h4_short_filter_min": float(
                 h4_short_filter if h4_short_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_short_filter_min"]
             ),
-            "wt_h4_long_close_zone": float(
-                h4_long_close_zone if h4_long_close_zone not in (None, "") else DEFAULT_PARAMS["wt_h4_long_close_zone"]
-            ),
-            "wt_h4_invalidation_exit_enabled": True,
             "wt_long_tp1_enabled": True,
             "wt_long_tp1_pct": float(
                 (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_long_tp1_pct", 0.01) * 100.0)
             ) / 100.0,
             "wt_long_tp1_fraction": float(DEFAULT_PARAMS.get("wt_long_tp1_fraction", 1.0 / 3.0)),
+            "wt_short_tp1_enabled": True,
+            "wt_short_tp1_pct": float(
+                (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01) * 100.0)
+            ) / 100.0,
+            "wt_short_tp1_fraction": float(DEFAULT_PARAMS.get("wt_short_tp1_fraction", 1.0 / 3.0)),
             "atr_stop_enabled": False,
             "breakeven_trigger_atr": 0.0,
             "trailing_trigger_atr": 0.0,
@@ -340,7 +339,6 @@ def _grid_overrides_from_controls(
     short_zone_grid,
     h4_long_filter_grid,
     h4_short_filter_grid,
-    h4_long_close_zone_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -371,11 +369,6 @@ def _grid_overrides_from_controls(
             WT_H4_SHORT_FILTER_MIN_GRID,
             float,
         ),
-        "wt_h4_long_close_zone": _clean_selected_values(
-            h4_long_close_zone_grid,
-            WT_H4_LONG_CLOSE_ZONE_GRID,
-            float,
-        ),
     }
 
 
@@ -388,34 +381,24 @@ def _grid_combo_count(grid_overrides: dict) -> int:
 
 PARAM_SUMMARY_ORDER = [
     "trade_direction",
-    "wt_channel_len",
-    "wt_avg_len",
-    "wt_signal_len",
     "wt_long_entry_max_above_zero",
     "wt_short_entry_min_below_zero",
     "wt_h4_long_filter_max",
     "wt_h4_short_filter_min",
-    "wt_h4_long_close_zone",
     "wt_long_tp1_pct",
     "wt_long_tp1_fraction",
-    "wt_h4_invalidation_exit_enabled",
     "fee_rate",
     "slippage_bps",
 ]
 
 PARAM_SUMMARY_LABELS = {
     "trade_direction": "Direction",
-    "wt_channel_len": "Channel",
-    "wt_avg_len": "Average",
-    "wt_signal_len": "Signal",
     "wt_long_entry_max_above_zero": "Long zone H1",
     "wt_short_entry_min_below_zero": "Short zone H1",
     "wt_h4_long_filter_max": "Long filter H4",
     "wt_h4_short_filter_min": "Short filter H4",
-    "wt_h4_long_close_zone": "Long close zone H4",
     "wt_long_tp1_pct": "Long TP1",
     "wt_long_tp1_fraction": "Long TP1 fraction",
-    "wt_h4_invalidation_exit_enabled": "H4 emergency exit",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -546,16 +529,14 @@ def fig_wfo(wd):
 def fig_pdist(wd):
     if wd is None or wd.empty: return go.Figure(layout=PT)
     specs = [
-        ("best_wt_channel_len", "Channel", C["blue"]),
-        ("best_wt_avg_len", "Average", C["green"]),
-        ("best_wt_signal_len", "Signal", C["amber"]),
         ("best_wt_long_entry_max_above_zero", "Long zone H1", C["green"]),
         ("best_wt_short_entry_min_below_zero", "Short zone H1", C["red"]),
         ("best_wt_h4_long_filter_max", "Long filter H4", C["purple"]),
         ("best_wt_h4_short_filter_min", "Short filter H4", C["coral"]),
     ]
+    rows = max(1, (len(specs) + 1) // 2)
     fig = make_subplots(
-        rows=4,
+        rows=rows,
         cols=2,
         subplot_titles=[title for _, title, _ in specs],
         vertical_spacing=0.12,
@@ -573,7 +554,7 @@ def fig_pdist(wd):
             row=row,
             col=col_idx,
         )
-    fig.update_layout(**PT, height=920)
+    fig.update_layout(**PT, height=max(520, rows * 260))
     return fig
 
 def fig_fee(fd):
@@ -1037,7 +1018,8 @@ def _trade_detail_panel(trade: dict | None) -> html.Div:
         ], style={"display": "flex", "gap": "16px", "marginBottom": "6px"})
 
     trade_no = fmt_text(trade.get("trade_no"), "")
-    title = f"Trade #{trade_no}" if trade_no else "Szczegoly trade'u"
+    trade_label = fmt_text(trade.get("trade_label"), "")
+    title = f"Trade #{trade_no} / {trade_label}" if trade_label else (f"Trade #{trade_no}" if trade_no else "Szczegoly trade'u")
     side = fmt_text(trade.get("side"), "").lower()
     pnl = _as_float(trade.get("pnl"), 0.0)
     pnl_clr = C["green"] if pnl >= 0 else C["red"]
@@ -1149,6 +1131,17 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
     tdf = trades_df.copy().reset_index(drop=True)
     if "trade_no" not in tdf.columns:
         tdf["trade_no"] = np.arange(1, len(tdf) + 1)
+    if "logical_trade_no" not in tdf.columns:
+        tdf["logical_trade_no"] = tdf["trade_no"]
+    if "trade_event" not in tdf.columns:
+        reasons = tdf.get("reason", pd.Series([""] * len(tdf), index=tdf.index)).astype(str)
+        tdf["trade_event"] = np.where(reasons.str.contains("TP1_PARTIAL", case=False, na=False), "TP", "EXIT")
+    if "trade_label" not in tdf.columns:
+        logical_ids = pd.to_numeric(tdf["logical_trade_no"], errors="coerce").fillna(tdf["trade_no"])
+        tdf["trade_label"] = [
+            f"{int(float(trade_id))} {str(event or 'EXIT').upper()}"
+            for trade_id, event in zip(logical_ids, tdf["trade_event"])
+        ]
 
     numeric_cols = [
         "entry_price", "exit_price", "gross_ret", "fee_ret", "net_ret",
@@ -1158,7 +1151,7 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         "entry_h4_wt1", "entry_h4_wt2", "entry_h4_delta",
         "exit_wt1", "exit_wt2", "exit_delta",
         "exit_signal_level", "exit_h4_wt1", "exit_h4_wt2", "exit_h4_delta",
-        "close_fraction", "remaining_fraction_after", "position_notional",
+        "close_fraction", "remaining_fraction_after", "position_notional", "logical_trade_no",
     ]
     for col in numeric_cols:
         if col in tdf.columns:
@@ -1186,7 +1179,8 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
     cols = [
         c for c in [
             "trade_no", "side", "entry_time", "exit_time", "entry_price",
-            "exit_price", "close_fraction", "remaining_fraction_after",
+            "exit_price", "logical_trade_no", "trade_event", "trade_label",
+            "close_fraction", "remaining_fraction_after",
             "gross_ret", "fee_ret", "net_ret", "pnl", "fee_usd", "reason",
         ] if c in tdf.columns
     ]
@@ -1205,6 +1199,8 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
             disp[col] = pd.to_datetime(disp[col]).dt.strftime("%Y-%m-%d %H:%M")
     if "trade_no" in disp.columns:
         disp["trade_no"] = disp["trade_no"].astype(int)
+    if "logical_trade_no" in disp.columns:
+        disp["logical_trade_no"] = disp["logical_trade_no"].astype(int)
     return disp
 
 
@@ -1236,6 +1232,7 @@ def _pine_trade_add_lines(result_data: dict) -> list[str]:
         return []
 
     lines: list[str] = []
+    added_entries: set[int] = set()
 
     for idx, trade in trades_df.iterrows():
         side = str(trade.get("side", "")).strip().lower()
@@ -1250,23 +1247,28 @@ def _pine_trade_add_lines(result_data: dict) -> list[str]:
             continue
 
         try:
-            trade_no = int(float(trade.get("trade_no", idx + 1)))
+            logical_trade_no = int(float(trade.get("logical_trade_no", trade.get("trade_no", idx + 1))))
         except Exception:
-            trade_no = int(idx) + 1
+            logical_trade_no = int(idx) + 1
         pnl = _pine_number(trade.get("pnl", 0.0), 8)
         direction = side.upper()
         entry_action, exit_action = ("BUY", "SELL") if side == "long" else ("SELL", "BUY")
-        entry_comment = f"T{trade_no} ENTRY {direction} {entry_action}"
-        exit_comment = f"T{trade_no} EXIT {direction} {exit_action}"
+        event = str(trade.get("trade_event", "") or "").strip().upper()
+        if not event:
+            event = "TP" if "TP1_PARTIAL" in str(trade.get("reason", "")).upper() else "EXIT"
+        entry_comment = f"T{logical_trade_no} OPEN {direction} {entry_action}"
+        exit_comment = f"T{logical_trade_no} {event} {direction} {exit_action}"
 
-        lines.append(
-            f"    f_add({entry_ts},{_pine_string(entry_action)},{_pine_number(entry_price, 8)},"
-            f"{trade_no},{_pine_string(entry_comment)},{pnl})"
-        )
+        if logical_trade_no not in added_entries:
+            lines.append(
+                f"    f_add({entry_ts},{_pine_string(entry_action)},{_pine_number(entry_price, 8)},"
+                f"{logical_trade_no},{_pine_string(entry_comment)},{pnl})"
+            )
+            added_entries.add(logical_trade_no)
         if pd.notna(exit_price) and exit_ts is not None:
             lines.append(
                 f"    f_add({exit_ts},{_pine_string(exit_action)},{_pine_number(exit_price, 8)},"
-                f"{trade_no},{_pine_string(exit_comment)},{pnl})"
+                f"{logical_trade_no},{_pine_string(exit_comment)},{pnl})"
             )
 
     return lines
@@ -1881,43 +1883,48 @@ def lightweight_chart_payload(
 
     markers: list[dict[str, object]] = []
     trade_pins: list[dict[str, object]] = []
+    added_entry_markers: set[int] = set()
     if not filtered_trades.empty:
         for trade in filtered_trades.itertuples(index=False):
             trade_no = int(_as_float(getattr(trade, "trade_no", 0), 0.0))
+            logical_trade_no = int(_as_float(getattr(trade, "logical_trade_no", trade_no), float(trade_no)))
+            trade_label = str(getattr(trade, "trade_label", "") or f"{logical_trade_no} EXIT")
             side = str(getattr(trade, "side", "")).lower()
             pnl = _as_float(getattr(trade, "pnl", 0.0), 0.0)
             reason = str(getattr(trade, "reason", "") or "")
             entry_price = _as_float(getattr(trade, "entry_price", 0.0), 0.0)
             exit_price = _as_float(getattr(trade, "exit_price", 0.0), 0.0)
-            markers.append(
-                {
-                    "time": _unix_seconds(trade.entry_time),
-                    "position": "belowBar" if side == "long" else "aboveBar",
-                    "shape": "arrowUp" if side == "long" else "arrowDown",
-                    "color": C["green"] if side == "long" else C["coral"],
-                    "text": f"#{trade_no}",
-                }
-            )
+            if logical_trade_no not in added_entry_markers:
+                markers.append(
+                    {
+                        "time": _unix_seconds(trade.entry_time),
+                        "position": "belowBar" if side == "long" else "aboveBar",
+                        "shape": "arrowUp" if side == "long" else "arrowDown",
+                        "color": C["green"] if side == "long" else C["coral"],
+                        "text": f"#{logical_trade_no}",
+                    }
+                )
+                trade_pins.append(
+                    {
+                        "tradeNo": trade_no,
+                        "time": _unix_seconds(trade.entry_time),
+                        "price": round(entry_price, 6),
+                        "label": f"{logical_trade_no} OPEN",
+                        "anchor": "below" if side == "long" else "above",
+                        "kind": "entry",
+                        "side": side,
+                        "color": C["green"] if side == "long" else C["coral"],
+                        "tooltip": f"Trade {logical_trade_no} open | {side.upper()} | {reason or 'OPEN'}",
+                    }
+                )
+                added_entry_markers.add(logical_trade_no)
             markers.append(
                 {
                     "time": _unix_seconds(trade.exit_time),
                     "position": "aboveBar" if side == "long" else "belowBar",
                     "shape": "circle",
                     "color": "#22c55e" if pnl >= 0 else "#ef4444",
-                    "text": f"#{trade_no}",
-                }
-            )
-            trade_pins.append(
-                {
-                    "tradeNo": trade_no,
-                    "time": _unix_seconds(trade.entry_time),
-                    "price": round(entry_price, 6),
-                    "label": f"#{trade_no}",
-                    "anchor": "below" if side == "long" else "above",
-                    "kind": "entry",
-                    "side": side,
-                    "color": C["green"] if side == "long" else C["coral"],
-                    "tooltip": f"Trade #{trade_no} entry | {side.upper()} | {reason or 'OPEN'}",
+                    "text": trade_label,
                 }
             )
             trade_pins.append(
@@ -1925,12 +1932,12 @@ def lightweight_chart_payload(
                     "tradeNo": trade_no,
                     "time": _unix_seconds(trade.exit_time),
                     "price": round(exit_price, 6),
-                    "label": f"#{trade_no}",
+                    "label": trade_label,
                     "anchor": "above" if side == "long" else "below",
                     "kind": "exit",
                     "side": side,
                     "color": "#22c55e" if pnl >= 0 else "#ef4444",
-                    "tooltip": f"Trade #{trade_no} exit | {side.upper()} | {reason or f'{pnl:+.2f} USD'}",
+                    "tooltip": f"Trade {trade_label} | {side.upper()} | {reason or f'{pnl:+.2f} USD'}",
                 }
             )
 
@@ -2303,14 +2310,14 @@ def sidebar():
             html.Div([
                 html.Div([field("Channel", inp("inp-bt-channel", DEFAULT_PARAMS["wt_channel_len"], type="number", min=2, step=1))], style={"flex":"1"}),
                 html.Div([field("Average", inp("inp-bt-avg", DEFAULT_PARAMS["wt_avg_len"], type="number", min=2, step=1))], style={"flex":"1"}),
-            ], style={"display":"flex","gap":"8px"}),
+            ], style={"display":"none"}),
             html.Div([
                 html.Div([field("Signal", inp("inp-bt-signal", DEFAULT_PARAMS["wt_signal_len"], type="number", min=2, step=1))], style={"flex":"1"}),
                 html.Div(
                     [field("Min level", inp("inp-bt-min-level", DEFAULT_PARAMS["wt_min_signal_level"], type="number", step=1))],
                     style={"display":"none"},
                 ),
-            ], style={"display":"flex","gap":"8px"}),
+            ], style={"display":"none"}),
             html.Div([
                 html.Div([field("Long zone H1", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short zone H1", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"flex":"1"}),
@@ -2319,10 +2326,7 @@ def sidebar():
                 html.Div([field("Long filter H4", inp("inp-bt-h4-long", DEFAULT_PARAMS["wt_h4_long_filter_max"], type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
-            html.Div([
-                html.Div([field("Long close zone H4", inp("inp-bt-h4-long-close-zone", DEFAULT_PARAMS["wt_h4_long_close_zone"], type="number", step=1))], style={"flex":"1"}),
-                html.Div([field("Long TP1 %", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
-            ], style={"display":"flex","gap":"8px"}),
+            html.Div([field("TP1 % long/short", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
             html.Div([
                 html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
@@ -2338,7 +2342,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_3: wejście jest od razu na świeżej kropce H1. Long ma TP1 na 1/3 pozycji, pełne wyjście po czerwonej kropce H4 albo po trzeciej czerwonej kropce H1 w wysokiej strefie H4.",
+                "BEE4_3: Channel/Average/Signal są stałe 10/21/3. TP1 zamyka 1/3 pozycji przy +1%. Long wychodzi po H4 red dot albo po trzeciej czerwonej kropce H1, gdy linie H4 się zbliżają.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2442,14 +2446,8 @@ def sidebar():
                 value=WT_H4_SHORT_FILTER_MIN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Long close zone H4"),
-            dcc.Checklist(id="chk-grid-h4-long-close-zone",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_CLOSE_ZONE_OPTIONS],
-                value=WT_H4_LONG_CLOSE_ZONE_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "WFO w BEE4_3 testuje głębokość wejścia H1, osobne progi H4 dla long/short oraz strefę H4 zamykania longa. TP1 jest stałe: 1/3 pozycji przy +1%.",
+                "WFO w BEE4_3 testuje głębokość wejścia H1 oraz osobne progi H4 dla long/short. Channel/Average/Signal są stałe 10/21/3, TP1 jest stałe: 1/3 pozycji przy +1%.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2729,7 +2727,6 @@ def _worker(
     bt_short_zone,
     bt_h4_long,
     bt_h4_short,
-    bt_h4_long_close_zone,
     bt_long_tp1_pct,
     grid_channel,
     grid_avg,
@@ -2743,7 +2740,6 @@ def _worker(
     grid_short_zone,
     grid_h4_long,
     grid_h4_short,
-    grid_h4_long_close_zone,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -2809,7 +2805,6 @@ def _worker(
             bt_short_zone,
             bt_h4_long,
             bt_h4_short,
-            bt_h4_long_close_zone,
             bt_long_tp1_pct,
             fee_rate_val,
             slip_bps_val,
@@ -2867,7 +2862,6 @@ def _worker(
             grid_short_zone,
             grid_h4_long,
             grid_h4_short,
-            grid_h4_long_close_zone,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3205,7 +3199,7 @@ def load_saved_result(n_clicks, filename):
     State("inp-bt-ema-len","value"),
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
     State("inp-bt-h4-long","value"), State("inp-bt-h4-short","value"),
-    State("inp-bt-h4-long-close-zone","value"), State("inp-bt-long-tp1-pct","value"),
+    State("inp-bt-long-tp1-pct","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
@@ -3213,7 +3207,6 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     State("chk-grid-h4-long","value"), State("chk-grid-h4-short","value"),
-    State("chk-grid-h4-long-close-zone","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3221,10 +3214,10 @@ def on_run_stop(nr, ns,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-    bt_h4_long_close_zone, bt_long_tp1_pct,
+    bt_long_tp1_pct,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-    grid_h4_long, grid_h4_short, grid_h4_long_close_zone):
+    grid_h4_long, grid_h4_short):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3248,10 +3241,10 @@ def on_run_stop(nr, ns,
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-            bt_h4_long_close_zone, bt_long_tp1_pct,
+            bt_long_tp1_pct,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-            grid_h4_long, grid_h4_short, grid_h4_long_close_zone,
+            grid_h4_long, grid_h4_short,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

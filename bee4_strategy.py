@@ -69,6 +69,9 @@ class TradeRecord:
     exit_h4_delta: float = 0.0
     close_fraction: float = 1.0
     remaining_fraction_after: float = 0.0
+    logical_trade_no: int = 0
+    trade_event: str = ""
+    trade_label: str = ""
 
 
 class Bee4Strategy:
@@ -80,6 +83,13 @@ class Bee4Strategy:
         self.slippage_bps = params.get("slippage_bps", 0.0)
         self.spread_bps = params.get("spread_bps", 0.0)
         self.position: Optional[PositionState] = None
+        self.next_trade_id = 1
+
+    @staticmethod
+    def _trade_event(signal: Signal) -> str:
+        if signal.action == "close_partial":
+            return "TP"
+        return "EXIT"
 
     def _close_position(self, capital, bar, signal, capital_at_open, entry_meta=None):
         pos = self.position
@@ -114,6 +124,9 @@ class Bee4Strategy:
         em = entry_meta or pos.entry_meta or {}
         xm = signal.meta or {}
         remaining_after = max(0.0, pos.remaining_fraction - close_fraction)
+        trade_id = int(pos.trade_id or 0)
+        trade_event = self._trade_event(signal)
+        trade_label = f"{trade_id} {trade_event}".strip()
 
         rec = TradeRecord(
             side=pos.side,
@@ -157,6 +170,9 @@ class Bee4Strategy:
             exit_h4_delta=xm.get("exit_h4_delta", 0.0),
             close_fraction=close_fraction,
             remaining_fraction_after=remaining_after,
+            logical_trade_no=trade_id,
+            trade_event=trade_event,
+            trade_label=trade_label,
         )
         if signal.action == "close_partial" and remaining_after > 1e-9:
             pos.remaining_fraction = remaining_after
@@ -172,6 +188,7 @@ class Bee4Strategy:
         trades = []
         equity_curve = []
         self.position = None
+        self.next_trade_id = 1
 
         if len(df) == 0:
             return pd.DataFrame(), pd.DataFrame(columns=["time", "equity"]), capital
@@ -219,6 +236,8 @@ class Bee4Strategy:
                         params=self.params,
                         entry_meta=entry_meta,
                     )
+                    self.position.trade_id = self.next_trade_id
+                    self.next_trade_id += 1
                     self.position.entry_meta["entry_stop_price"] = (
                         round(self.position.stop_price, 4)
                         if not np.isnan(self.position.stop_price)
@@ -275,6 +294,9 @@ class Bee4Strategy:
             "exit_h4_delta",
             "close_fraction",
             "remaining_fraction_after",
+            "logical_trade_no",
+            "trade_event",
+            "trade_label",
         ]
 
         if trades:

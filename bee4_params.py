@@ -48,13 +48,12 @@ HTF_EMA_INTERVAL = "4h"
 WT_H4_FILTER_INTERVAL = "4h"
 WT_H4_LONG_FILTER_MAX = -20.0
 WT_H4_SHORT_FILTER_MIN = 50.0
-WT_H4_INVALIDATION_EXIT_ENABLED = True
 WT_LONG_TP1_ENABLED = True
 WT_LONG_TP1_PCT = 0.01
 WT_LONG_TP1_FRACTION = 1.0 / 3.0
-WT_H4_LONG_CLOSE_ZONE = 40.0
-WT_H4_LONG_CLOSE_ZONE_GRID = [40.0]
-WT_H4_LONG_CLOSE_ZONE_OPTIONS = [30.0, 40.0, 50.0, 60.0]
+WT_SHORT_TP1_ENABLED = True
+WT_SHORT_TP1_PCT = 0.01
+WT_SHORT_TP1_FRACTION = 1.0 / 3.0
 ATR_LEN = 14
 ATR_STOP_ENABLED = False
 ATR_STOP_MULTIPLIER = 2.0
@@ -127,11 +126,12 @@ DEFAULT_PARAMS = {
     "wt_h4_filter_interval": WT_H4_FILTER_INTERVAL,
     "wt_h4_long_filter_max": WT_H4_LONG_FILTER_MAX,
     "wt_h4_short_filter_min": WT_H4_SHORT_FILTER_MIN,
-    "wt_h4_invalidation_exit_enabled": WT_H4_INVALIDATION_EXIT_ENABLED,
     "wt_long_tp1_enabled": WT_LONG_TP1_ENABLED,
     "wt_long_tp1_pct": WT_LONG_TP1_PCT,
     "wt_long_tp1_fraction": WT_LONG_TP1_FRACTION,
-    "wt_h4_long_close_zone": WT_H4_LONG_CLOSE_ZONE,
+    "wt_short_tp1_enabled": WT_SHORT_TP1_ENABLED,
+    "wt_short_tp1_pct": WT_SHORT_TP1_PCT,
+    "wt_short_tp1_fraction": WT_SHORT_TP1_FRACTION,
     "htf_ema_len": HTF_EMA_LEN,
     "htf_ema_interval": HTF_EMA_INTERVAL,
     "atr_len": ATR_LEN,

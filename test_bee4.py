@@ -62,11 +62,12 @@ BASE_PARAMS = {
     "wt_h4_filter_interval": "4h",
     "wt_h4_long_filter_max": -20.0,
     "wt_h4_short_filter_min": 50.0,
-    "wt_h4_invalidation_exit_enabled": True,
     "wt_long_tp1_enabled": True,
     "wt_long_tp1_pct": 0.01,
     "wt_long_tp1_fraction": 1.0 / 3.0,
-    "wt_h4_long_close_zone": 40.0,
+    "wt_short_tp1_enabled": True,
+    "wt_short_tp1_pct": 0.01,
+    "wt_short_tp1_fraction": 1.0 / 3.0,
     "atr_stop_enabled": False,
     "atr_stop_multiplier": 2.0,
     "breakeven_trigger_atr": 0.0,
@@ -380,7 +381,19 @@ class TestExitSignals:
 
         assert sig.action == "none"
 
-    def test_reverse_long_to_short_on_opposite_signal(self):
+    def test_short_tp1_closes_one_third_when_price_drops_one_percent(self):
+        bar = _make_bar(close=1800.0)
+        bar.low = 1780.0
+        pos = PositionState(side="short", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_partial_exit_signal(bar, BASE_PARAMS, pos)
+
+        assert sig.action == "close_partial"
+        assert sig.reason == "SHORT_TP1_PARTIAL"
+        assert sig.exit_price == pytest.approx(1782.0)
+        assert sig.meta["close_fraction"] == pytest.approx(1.0 / 3.0)
+
+    def test_opposite_short_signal_does_not_close_or_reverse_long(self):
         prev = _make_bar(
             wt1=48.0,
             wt2=42.0,
@@ -401,10 +414,9 @@ class TestExitSignals:
 
         sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
 
-        assert sig.action == "close_reverse"
-        assert sig.reason == "REVERSE_TO_SHORT"
+        assert sig.action == "none"
 
-    def test_force_exit_long_in_long_only_mode(self):
+    def test_opposite_short_signal_does_not_force_exit_long_only_mode(self):
         prev = _make_bar(
             wt1=48.0,
             wt2=42.0,
@@ -425,8 +437,7 @@ class TestExitSignals:
 
         sig = generate_exit_signal(bar, prev, LONG_ONLY_PARAMS, pos)
 
-        assert sig.action == "close_force"
-        assert sig.reason == "WT_H1_RED_DOT_H4_FILTER_EXIT_LONG"
+        assert sig.action == "none"
 
     def test_h4_red_dot_closes_long(self):
         prev = _make_bar(
@@ -452,58 +463,58 @@ class TestExitSignals:
         assert sig.action == "close_force"
         assert sig.reason == "WT_H4_RED_DOT_EXIT_LONG"
 
-    def test_third_h1_red_dot_closes_long_when_h4_is_above_close_zone(self):
+    def test_third_h1_red_dot_closes_long_when_h4_lines_converge(self):
         prev = _make_bar(
             wt1=52.0,
             wt2=46.0,
-            h4_wt1=56.0,
+            h4_wt1=58.0,
             h4_wt2=50.0,
-            h4_prev_wt1=52.0,
-            h4_prev_wt2=48.0,
+            h4_prev_wt1=64.0,
+            h4_prev_wt2=50.0,
         )
         bar = _make_bar(
             wt1=50.0,
             wt2=56.0,
             h4_wt1=56.0,
             h4_wt2=50.0,
-            h4_prev_wt1=52.0,
-            h4_prev_wt2=48.0,
+            h4_prev_wt1=64.0,
+            h4_prev_wt2=50.0,
         )
-        params = {**LONG_ONLY_PARAMS, "wt_h4_invalidation_exit_enabled": False}
+        params = dict(LONG_ONLY_PARAMS)
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time, h1_red_close_count=2)
 
         sig = generate_exit_signal(bar, prev, params, pos)
 
         assert sig.action == "close_force"
-        assert sig.reason == "WT_H1_THIRD_RED_DOT_H4_CLOSE_ZONE_EXIT_LONG"
+        assert sig.reason == "WT_H1_THIRD_RED_DOT_H4_CONVERGENCE_EXIT_LONG"
         assert sig.meta["h1_red_close_count"] == 3
 
-    def test_h1_red_dot_does_not_count_when_h4_below_close_zone(self):
+    def test_h1_red_dot_counts_but_does_not_close_when_h4_lines_diverge(self):
         prev = _make_bar(
             wt1=52.0,
             wt2=46.0,
-            h4_wt1=35.0,
-            h4_wt2=34.0,
-            h4_prev_wt1=32.0,
-            h4_prev_wt2=31.0,
+            h4_wt1=44.0,
+            h4_wt2=40.0,
+            h4_prev_wt1=42.0,
+            h4_prev_wt2=40.0,
         )
         bar = _make_bar(
             wt1=50.0,
             wt2=56.0,
-            h4_wt1=35.0,
-            h4_wt2=34.0,
-            h4_prev_wt1=32.0,
-            h4_prev_wt2=31.0,
+            h4_wt1=48.0,
+            h4_wt2=40.0,
+            h4_prev_wt1=42.0,
+            h4_prev_wt2=40.0,
         )
-        params = {**LONG_ONLY_PARAMS, "wt_h4_invalidation_exit_enabled": False}
+        params = dict(LONG_ONLY_PARAMS)
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time, h1_red_close_count=2)
 
         sig = generate_exit_signal(bar, prev, params, pos)
 
         assert sig.action == "none"
-        assert pos.h1_red_close_count == 2
+        assert pos.h1_red_close_count == 3
 
-    def test_ignore_h4_long_exit_while_h1_remains_below_zero(self):
+    def test_h4_gap_widening_does_not_close_long(self):
         prev = _make_bar(
             wt1=-35.0,
             wt2=-42.0,
@@ -526,7 +537,7 @@ class TestExitSignals:
 
         assert sig.action == "none"
 
-    def test_emergency_exit_long_when_h1_leaves_negative_zone(self):
+    def test_h1_positive_zone_without_exit_signal_does_not_close_long(self):
         prev = _make_bar(
             wt1=5.0,
             wt2=2.0,
@@ -547,10 +558,9 @@ class TestExitSignals:
 
         sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
 
-        assert sig.action == "close_force"
-        assert sig.reason == "H4_LONG_INVALIDATION_EXIT"
+        assert sig.action == "none"
 
-    def test_emergency_exit_short_when_h4_turns_against_position(self):
+    def test_h4_gap_widening_does_not_close_short(self):
         prev = _make_bar(
             wt1=64.0,
             wt2=54.0,
@@ -571,8 +581,56 @@ class TestExitSignals:
 
         sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
 
+        assert sig.action == "none"
+
+    def test_h4_green_dot_closes_short(self):
+        prev = _make_bar(
+            wt1=5.0,
+            wt2=8.0,
+            h4_wt1=48.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=54.0,
+            h4_prev_wt2=52.0,
+        )
+        bar = _make_bar(
+            wt1=4.0,
+            wt2=7.0,
+            h4_wt1=56.0,
+            h4_wt2=50.0,
+            h4_prev_wt1=48.0,
+            h4_prev_wt2=52.0,
+        )
+        pos = PositionState(side="short", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
         assert sig.action == "close_force"
-        assert sig.reason == "H4_SHORT_INVALIDATION_EXIT"
+        assert sig.reason == "WT_H4_GREEN_DOT_EXIT_SHORT"
+
+    def test_third_h1_green_dot_closes_short_when_h4_lines_converge(self):
+        prev = _make_bar(
+            wt1=-56.0,
+            wt2=-52.0,
+            h4_wt1=-58.0,
+            h4_wt2=-50.0,
+            h4_prev_wt1=-64.0,
+            h4_prev_wt2=-50.0,
+        )
+        bar = _make_bar(
+            wt1=-46.0,
+            wt2=-50.0,
+            h4_wt1=-56.0,
+            h4_wt2=-50.0,
+            h4_prev_wt1=-64.0,
+            h4_prev_wt2=-50.0,
+        )
+        pos = PositionState(side="short", entry_price=1800.0, entry_time=bar.time, h1_green_close_count=2)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "WT_H1_THIRD_GREEN_DOT_H4_CONVERGENCE_EXIT_SHORT"
+        assert sig.meta["h1_green_close_count"] == 3
 
 
 class TestBarHelpers:
@@ -651,12 +709,14 @@ class TestBacktestAccounting:
 
         assert list(trades["reason"])[:2] == [
             "LONG_TP1_PARTIAL",
-            "WT_H1_RED_DOT_H4_FILTER_EXIT_LONG",
+            "FORCE_EXIT_END",
         ]
         assert trades.iloc[0]["close_fraction"] == pytest.approx(1.0 / 3.0)
         assert trades.iloc[0]["remaining_fraction_after"] == pytest.approx(2.0 / 3.0)
         assert trades.iloc[0]["position_notional"] == pytest.approx(3_000.0)
         assert trades.iloc[1]["position_notional"] == pytest.approx(6_000.0)
+        assert trades.iloc[0]["logical_trade_no"] == trades.iloc[1]["logical_trade_no"]
+        assert list(trades["trade_event"])[:2] == ["TP", "EXIT"]
         assert len(equity) >= 3
         assert final_cap > 9_000.0
 
@@ -735,7 +795,6 @@ class TestWFOHelpers:
                 "best_wt_short_entry_min_below_zero": [30.0, 30.0, 40.0],
                 "best_wt_h4_long_filter_max": [-20.0, -20.0, -30.0],
                 "best_wt_h4_short_filter_min": [50.0, 50.0, 60.0],
-                "best_wt_h4_long_close_zone": [40.0, 40.0, 50.0],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
                 "n_trades_live": [2, 1, 1],
@@ -754,7 +813,6 @@ class TestWFOHelpers:
         assert best["wt_short_entry_min_below_zero"] == pytest.approx(30.0)
         assert best["wt_h4_long_filter_max"] == pytest.approx(-20.0)
         assert best["wt_h4_short_filter_min"] == pytest.approx(50.0)
-        assert best["wt_h4_long_close_zone"] == pytest.approx(40.0)
 
     def test_wfo_accepts_bee4_2_grid_overrides(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
@@ -785,7 +843,6 @@ class TestWFOHelpers:
             "wt_short_entry_min_below_zero": [30.0],
             "wt_h4_long_filter_max": [-20.0],
             "wt_h4_short_filter_min": [50.0],
-            "wt_h4_long_close_zone": [40.0],
         }
 
         _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
@@ -809,7 +866,6 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {30.0}
         assert set(windows_df["best_wt_h4_long_filter_max"]) == {-20.0}
         assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
-        assert set(windows_df["best_wt_h4_long_close_zone"]) == {40.0}
 
     def test_wfo_can_stop_during_first_window(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
