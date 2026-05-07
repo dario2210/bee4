@@ -27,6 +27,7 @@ from bee4_engine import (
     compute_trade_close,
     generate_entry_signal,
     generate_exit_signal,
+    generate_partial_exit_signal,
 )
 from bee4_params import (
     BINANCE_INTERVAL,
@@ -64,6 +65,9 @@ def load_state() -> dict:
             "capital_at_open": None,
             "stop_price": None,
             "entry_atr": None,
+            "remaining_fraction": 1.0,
+            "tp1_taken": False,
+            "h1_red_close_count": 0,
             "last_bar_time": None,
             "daily_loss_usd": 0.0,
             "daily_date": None,
@@ -124,6 +128,9 @@ def position_from_state(state: dict) -> Optional[PositionState]:
         bars_in_position=int(state.get("bars_in_position", 0)),
         stop_price=float(state["stop_price"]) if state.get("stop_price") is not None else float("nan"),
         entry_atr=float(state["entry_atr"]) if state.get("entry_atr") is not None else float("nan"),
+        remaining_fraction=float(state.get("remaining_fraction", 1.0)),
+        tp1_taken=bool(state.get("tp1_taken", False)),
+        h1_red_close_count=int(state.get("h1_red_close_count", 0)),
     )
 
 
@@ -136,6 +143,9 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["capital_at_open"] = None
         state["stop_price"] = None
         state["entry_atr"] = None
+        state["remaining_fraction"] = 1.0
+        state["tp1_taken"] = False
+        state["h1_red_close_count"] = 0
     else:
         state["position"] = pos.side
         state["entry_price"] = pos.entry_price
@@ -143,6 +153,9 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["bars_in_position"] = pos.bars_in_position
         state["stop_price"] = None if np.isnan(pos.stop_price) else pos.stop_price
         state["entry_atr"] = None if np.isnan(pos.entry_atr) else pos.entry_atr
+        state["remaining_fraction"] = pos.remaining_fraction
+        state["tp1_taken"] = pos.tp1_taken
+        state["h1_red_close_count"] = pos.h1_red_close_count
 
 
 def execute_order(
@@ -192,50 +205,75 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
 
     position = position_from_state(state)
 
+    def _close_position_signal(position: PositionState, sig, capital: float, final_close: bool) -> float:
+        raw_exit = sig.exit_price if sig.exit_price is not None else bar.close
+        close_fraction = min(
+            max(float((sig.meta or {}).get("close_fraction", position.remaining_fraction)), 0.0),
+            position.remaining_fraction,
+        )
+        capital_at_open = float(state.get("capital_at_open") or capital)
+        close_notional = capital_at_open * close_fraction
+        exec_price = apply_slippage(raw_exit, position.side, "close", slip_bps, spread_bps)
+        exec_price = execute_order(position.side, "close", exec_price, close_notional, mode, sig.reason)
+
+        result = compute_trade_close(
+            entry_price=position.entry_price,
+            exit_price=exec_price,
+            side=position.side,
+            fee_rate=fee_rate,
+            capital_at_open=close_notional,
+        )
+
+        pnl = result["pnl"]
+        if pnl < 0:
+            state["daily_loss_usd"] = state.get("daily_loss_usd", 0.0) + abs(pnl)
+
+        capital += pnl
+        state["capital"] = capital
+
+        remaining_after = max(0.0, position.remaining_fraction - close_fraction)
+        trade_log = {
+            "ts": bar_time_str,
+            "side": position.side,
+            "entry_price": position.entry_price,
+            "exit_price": exec_price,
+            "gross_ret": result["gross_ret"],
+            "net_ret": result["net_ret"],
+            "pnl_usd": pnl,
+            "fee_usd": result["fee_usd"],
+            "reason": sig.reason,
+            "capital": capital,
+            "capital_at_open": capital_at_open,
+            "position_notional": close_notional,
+            "close_fraction": close_fraction,
+            "remaining_fraction_after": remaining_after,
+            "mode": mode,
+        }
+        log_trade(trade_log)
+        log.info(
+            f"[CLOSE] {position.side.upper()} | entry={position.entry_price:.2f} "
+            f"exit={exec_price:.2f} | net={result['net_ret'] * 100:.3f}% "
+            f"| pnl={pnl:.2f} USD | {sig.reason}"
+        )
+
+        if final_close or remaining_after <= 1e-9:
+            position_to_state(state, None)
+        else:
+            position.remaining_fraction = remaining_after
+            position.tp1_taken = True
+            position_to_state(state, position)
+        return capital
+
+    if position is not None:
+        sig = generate_partial_exit_signal(bar, params, position)
+        if sig.action != "none":
+            capital = _close_position_signal(position, sig, capital, final_close=False)
+            position = position_from_state(state)
+
     if position is not None:
         sig = generate_exit_signal(bar, prev, params, position)
         if sig.action != "none":
-            raw_exit = sig.exit_price if sig.exit_price is not None else bar.close
-            exec_price = apply_slippage(raw_exit, position.side, "close", slip_bps, spread_bps)
-            exec_price = execute_order(position.side, "close", exec_price, capital, mode, sig.reason)
-
-            capital_at_open = float(state.get("capital_at_open") or capital)
-            result = compute_trade_close(
-                entry_price=position.entry_price,
-                exit_price=exec_price,
-                side=position.side,
-                fee_rate=fee_rate,
-                capital_at_open=capital_at_open,
-            )
-
-            pnl = result["pnl"]
-            if pnl < 0:
-                state["daily_loss_usd"] = state.get("daily_loss_usd", 0.0) + abs(pnl)
-
-            capital += pnl
-            state["capital"] = capital
-
-            trade_log = {
-                "ts": bar_time_str,
-                "side": position.side,
-                "entry_price": position.entry_price,
-                "exit_price": exec_price,
-                "gross_ret": result["gross_ret"],
-                "net_ret": result["net_ret"],
-                "pnl_usd": pnl,
-                "fee_usd": result["fee_usd"],
-                "reason": sig.reason,
-                "capital": capital,
-                "capital_at_open": capital_at_open,
-                "mode": mode,
-            }
-            log_trade(trade_log)
-            log.info(
-                f"[CLOSE] {position.side.upper()} | entry={position.entry_price:.2f} "
-                f"exit={exec_price:.2f} | net={result['net_ret'] * 100:.3f}% "
-                f"| pnl={pnl:.2f} USD | {sig.reason}"
-            )
-            position_to_state(state, None)
+            capital = _close_position_signal(position, sig, capital, final_close=True)
         else:
             position_to_state(state, position)
 

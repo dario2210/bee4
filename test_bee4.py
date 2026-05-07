@@ -33,6 +33,7 @@ from bee4_engine import (
     bar_from_row,
     generate_entry_signal,
     generate_exit_signal,
+    generate_partial_exit_signal,
 )
 from bee4_strategy import Bee4Strategy
 from bee4_wfo import get_latest_best_params, walk_forward_optimization
@@ -41,7 +42,7 @@ from bee4_wfo import get_latest_best_params, walk_forward_optimization
 BASE_PARAMS = {
     "wt_channel_len": 10,
     "wt_avg_len": 21,
-    "wt_signal_len": 4,
+    "wt_signal_len": 3,
     "wt_min_signal_level": 0.0,
     "wt_zero_line": 0.0,
     "trade_direction": "both",
@@ -62,6 +63,10 @@ BASE_PARAMS = {
     "wt_h4_long_filter_max": -20.0,
     "wt_h4_short_filter_min": 50.0,
     "wt_h4_invalidation_exit_enabled": True,
+    "wt_long_tp1_enabled": True,
+    "wt_long_tp1_pct": 0.01,
+    "wt_long_tp1_fraction": 1.0 / 3.0,
+    "wt_h4_long_close_zone": 40.0,
     "atr_stop_enabled": False,
     "atr_stop_multiplier": 2.0,
     "breakeven_trigger_atr": 0.0,
@@ -214,9 +219,9 @@ class TestWaveTrendPreparation:
         )
 
         out = prepare_indicators(df)
-        wt1_col, wt2_col = wt_columns(10, 21, 4)
+        wt1_col, wt2_col = wt_columns(10, 21, BASE_PARAMS["wt_signal_len"])
         h4_wt1_col = htf_wt1_column(10, 21, "4h")
-        h4_wt2_col = htf_wt2_column(10, 21, 4, "4h")
+        h4_wt2_col = htf_wt2_column(10, 21, BASE_PARAMS["wt_signal_len"], "4h")
 
         for col in [
             "wt1",
@@ -258,7 +263,7 @@ class TestWaveTrendPreparation:
             .dropna()
             .reset_index()
         )
-        wt1_h4, wt2_h4 = compute_wave_trend(h4_df, 10, 21, 4)
+        wt1_h4, wt2_h4 = compute_wave_trend(h4_df, 10, 21, BASE_PARAMS["wt_signal_len"])
         manual_wt1 = pd.Series(wt1_h4.to_numpy(), index=pd.to_datetime(h4_df["time"], utc=True), dtype="float64")
         manual_wt2 = pd.Series(wt2_h4.to_numpy(), index=pd.to_datetime(h4_df["time"], utc=True), dtype="float64")
         closed_start = manual_wt2.dropna().index[8]
@@ -354,6 +359,27 @@ class TestEntrySignals:
 
 
 class TestExitSignals:
+    def test_long_tp1_closes_one_third_when_price_reaches_one_percent(self):
+        bar = _make_bar(close=1800.0)
+        bar.high = 1820.0
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_partial_exit_signal(bar, BASE_PARAMS, pos)
+
+        assert sig.action == "close_partial"
+        assert sig.reason == "LONG_TP1_PARTIAL"
+        assert sig.exit_price == pytest.approx(1818.0)
+        assert sig.meta["close_fraction"] == pytest.approx(1.0 / 3.0)
+
+    def test_long_tp1_only_once(self):
+        bar = _make_bar(close=1800.0)
+        bar.high = 1820.0
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time, tp1_taken=True)
+
+        sig = generate_partial_exit_signal(bar, BASE_PARAMS, pos)
+
+        assert sig.action == "none"
+
     def test_reverse_long_to_short_on_opposite_signal(self):
         prev = _make_bar(
             wt1=48.0,
@@ -401,6 +427,81 @@ class TestExitSignals:
 
         assert sig.action == "close_force"
         assert sig.reason == "WT_H1_RED_DOT_H4_FILTER_EXIT_LONG"
+
+    def test_h4_red_dot_closes_long(self):
+        prev = _make_bar(
+            wt1=-5.0,
+            wt2=-8.0,
+            h4_wt1=54.0,
+            h4_wt2=50.0,
+            h4_prev_wt1=48.0,
+            h4_prev_wt2=50.0,
+        )
+        bar = _make_bar(
+            wt1=-4.0,
+            wt2=-7.0,
+            h4_wt1=48.0,
+            h4_wt2=52.0,
+            h4_prev_wt1=54.0,
+            h4_prev_wt2=50.0,
+        )
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "WT_H4_RED_DOT_EXIT_LONG"
+
+    def test_third_h1_red_dot_closes_long_when_h4_is_above_close_zone(self):
+        prev = _make_bar(
+            wt1=52.0,
+            wt2=46.0,
+            h4_wt1=56.0,
+            h4_wt2=50.0,
+            h4_prev_wt1=52.0,
+            h4_prev_wt2=48.0,
+        )
+        bar = _make_bar(
+            wt1=50.0,
+            wt2=56.0,
+            h4_wt1=56.0,
+            h4_wt2=50.0,
+            h4_prev_wt1=52.0,
+            h4_prev_wt2=48.0,
+        )
+        params = {**LONG_ONLY_PARAMS, "wt_h4_invalidation_exit_enabled": False}
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time, h1_red_close_count=2)
+
+        sig = generate_exit_signal(bar, prev, params, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "WT_H1_THIRD_RED_DOT_H4_CLOSE_ZONE_EXIT_LONG"
+        assert sig.meta["h1_red_close_count"] == 3
+
+    def test_h1_red_dot_does_not_count_when_h4_below_close_zone(self):
+        prev = _make_bar(
+            wt1=52.0,
+            wt2=46.0,
+            h4_wt1=35.0,
+            h4_wt2=34.0,
+            h4_prev_wt1=32.0,
+            h4_prev_wt2=31.0,
+        )
+        bar = _make_bar(
+            wt1=50.0,
+            wt2=56.0,
+            h4_wt1=35.0,
+            h4_wt2=34.0,
+            h4_prev_wt1=32.0,
+            h4_prev_wt2=31.0,
+        )
+        params = {**LONG_ONLY_PARAMS, "wt_h4_invalidation_exit_enabled": False}
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time, h1_red_close_count=2)
+
+        sig = generate_exit_signal(bar, prev, params, pos)
+
+        assert sig.action == "none"
+        assert pos.h1_red_close_count == 2
 
     def test_ignore_h4_long_exit_while_h1_remains_below_zero(self):
         prev = _make_bar(
@@ -476,11 +577,11 @@ class TestExitSignals:
 
 class TestBarHelpers:
     def test_bar_from_row_reads_h1_h4_and_ema_columns(self):
-        wt1_col, wt2_col = wt_columns(10, 21, 4)
+        wt1_col, wt2_col = wt_columns(10, 21, BASE_PARAMS["wt_signal_len"])
         h4_wt1_col = htf_wt1_column(10, 21, "4h")
-        h4_wt2_col = htf_wt2_column(10, 21, 4, "4h")
+        h4_wt2_col = htf_wt2_column(10, 21, BASE_PARAMS["wt_signal_len"], "4h")
         h4_prev_wt1_col = htf_prev_wt1_column(10, 21, "4h")
-        h4_prev_wt2_col = htf_prev_wt2_column(10, 21, 4, "4h")
+        h4_prev_wt2_col = htf_prev_wt2_column(10, 21, BASE_PARAMS["wt_signal_len"], "4h")
         row = pd.Series(
             {
                 "time": pd.Timestamp("2024-01-01", tz="UTC"),
@@ -538,6 +639,26 @@ class TestSlippage:
 
     def test_short_open_decreases_price(self):
         assert apply_slippage(1800.0, "short", "open", 5.0, 2.0) < 1800.0
+
+
+class TestBacktestAccounting:
+    def test_partial_long_tp1_keeps_two_thirds_until_final_exit(self):
+        df = _signal_df()
+        params = dict(LONG_ONLY_PARAMS, fee_rate=0.0, slippage_bps=0.0, spread_bps=0.0)
+        strat = Bee4Strategy(params, fee_rate=0.0)
+
+        trades, equity, final_cap = strat.run(df, 9_000.0)
+
+        assert list(trades["reason"])[:2] == [
+            "LONG_TP1_PARTIAL",
+            "WT_H1_RED_DOT_H4_FILTER_EXIT_LONG",
+        ]
+        assert trades.iloc[0]["close_fraction"] == pytest.approx(1.0 / 3.0)
+        assert trades.iloc[0]["remaining_fraction_after"] == pytest.approx(2.0 / 3.0)
+        assert trades.iloc[0]["position_notional"] == pytest.approx(3_000.0)
+        assert trades.iloc[1]["position_notional"] == pytest.approx(6_000.0)
+        assert len(equity) >= 3
+        assert final_cap > 9_000.0
 
 
 class TestWFOHelpers:
@@ -604,7 +725,7 @@ class TestWFOHelpers:
             {
                 "best_wt_channel_len": [10, 10, 12],
                 "best_wt_avg_len": [21, 21, 28],
-                "best_wt_signal_len": [4, 4, 3],
+                "best_wt_signal_len": [3, 3, 4],
                 "best_wt_min_signal_level": [0.0, 0.0, 0.0],
                 "best_wt_reentry_window_bars": [0, 0, 0],
                 "best_wt_use_ema_filter": [False, False, False],
@@ -614,6 +735,7 @@ class TestWFOHelpers:
                 "best_wt_short_entry_min_below_zero": [30.0, 30.0, 40.0],
                 "best_wt_h4_long_filter_max": [-20.0, -20.0, -30.0],
                 "best_wt_h4_short_filter_min": [50.0, 50.0, 60.0],
+                "best_wt_h4_long_close_zone": [40.0, 40.0, 50.0],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
                 "n_trades_live": [2, 1, 1],
@@ -627,11 +749,12 @@ class TestWFOHelpers:
         assert best["allow_shorts"] is False
         assert best["wt_channel_len"] == 10
         assert best["wt_avg_len"] == 21
-        assert best["wt_signal_len"] == 4
+        assert best["wt_signal_len"] == 3
         assert best["wt_long_entry_max_above_zero"] == pytest.approx(-30.0)
         assert best["wt_short_entry_min_below_zero"] == pytest.approx(30.0)
         assert best["wt_h4_long_filter_max"] == pytest.approx(-20.0)
         assert best["wt_h4_short_filter_min"] == pytest.approx(50.0)
+        assert best["wt_h4_long_close_zone"] == pytest.approx(40.0)
 
     def test_wfo_accepts_bee4_2_grid_overrides(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
@@ -652,7 +775,7 @@ class TestWFOHelpers:
         grid_overrides = {
             "wt_channel_len": [10],
             "wt_avg_len": [21],
-            "wt_signal_len": [4],
+            "wt_signal_len": [3],
             "wt_min_signal_level": [0.0],
             "wt_reentry_window_bars": [0],
             "wt_use_ema_filter": [False],
@@ -662,6 +785,7 @@ class TestWFOHelpers:
             "wt_short_entry_min_below_zero": [30.0],
             "wt_h4_long_filter_max": [-20.0],
             "wt_h4_short_filter_min": [50.0],
+            "wt_h4_long_close_zone": [40.0],
         }
 
         _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
@@ -680,11 +804,12 @@ class TestWFOHelpers:
         assert not windows_df.empty
         assert set(windows_df["best_wt_channel_len"]) == {10}
         assert set(windows_df["best_wt_avg_len"]) == {21}
-        assert set(windows_df["best_wt_signal_len"]) == {4}
+        assert set(windows_df["best_wt_signal_len"]) == {3}
         assert set(windows_df["best_wt_long_entry_max_above_zero"]) == {-30.0}
         assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {30.0}
         assert set(windows_df["best_wt_h4_long_filter_max"]) == {-20.0}
         assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
+        assert set(windows_df["best_wt_h4_long_close_zone"]) == {40.0}
 
     def test_wfo_can_stop_during_first_window(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")

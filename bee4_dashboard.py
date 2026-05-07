@@ -26,6 +26,7 @@ from bee4_params import (
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
     WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
+    WT_H4_LONG_CLOSE_ZONE_GRID, WT_H4_LONG_CLOSE_ZONE_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -270,6 +271,8 @@ def _strategy_params_from_controls(
     short_zone,
     h4_long_filter,
     h4_short_filter,
+    h4_long_close_zone,
+    long_tp1_pct,
     fee_rate: float,
     slippage_bps: float,
 ) -> dict:
@@ -303,7 +306,15 @@ def _strategy_params_from_controls(
             "wt_h4_short_filter_min": float(
                 h4_short_filter if h4_short_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_short_filter_min"]
             ),
+            "wt_h4_long_close_zone": float(
+                h4_long_close_zone if h4_long_close_zone not in (None, "") else DEFAULT_PARAMS["wt_h4_long_close_zone"]
+            ),
             "wt_h4_invalidation_exit_enabled": True,
+            "wt_long_tp1_enabled": True,
+            "wt_long_tp1_pct": float(
+                (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_long_tp1_pct", 0.01) * 100.0)
+            ) / 100.0,
+            "wt_long_tp1_fraction": float(DEFAULT_PARAMS.get("wt_long_tp1_fraction", 1.0 / 3.0)),
             "atr_stop_enabled": False,
             "breakeven_trigger_atr": 0.0,
             "trailing_trigger_atr": 0.0,
@@ -329,6 +340,7 @@ def _grid_overrides_from_controls(
     short_zone_grid,
     h4_long_filter_grid,
     h4_short_filter_grid,
+    h4_long_close_zone_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -359,6 +371,11 @@ def _grid_overrides_from_controls(
             WT_H4_SHORT_FILTER_MIN_GRID,
             float,
         ),
+        "wt_h4_long_close_zone": _clean_selected_values(
+            h4_long_close_zone_grid,
+            WT_H4_LONG_CLOSE_ZONE_GRID,
+            float,
+        ),
     }
 
 
@@ -378,6 +395,9 @@ PARAM_SUMMARY_ORDER = [
     "wt_short_entry_min_below_zero",
     "wt_h4_long_filter_max",
     "wt_h4_short_filter_min",
+    "wt_h4_long_close_zone",
+    "wt_long_tp1_pct",
+    "wt_long_tp1_fraction",
     "wt_h4_invalidation_exit_enabled",
     "fee_rate",
     "slippage_bps",
@@ -392,6 +412,9 @@ PARAM_SUMMARY_LABELS = {
     "wt_short_entry_min_below_zero": "Short zone H1",
     "wt_h4_long_filter_max": "Long filter H4",
     "wt_h4_short_filter_min": "Short filter H4",
+    "wt_h4_long_close_zone": "Long close zone H4",
+    "wt_long_tp1_pct": "Long TP1",
+    "wt_long_tp1_fraction": "Long TP1 fraction",
     "wt_h4_invalidation_exit_enabled": "H4 emergency exit",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
@@ -1135,6 +1158,7 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         "entry_h4_wt1", "entry_h4_wt2", "entry_h4_delta",
         "exit_wt1", "exit_wt2", "exit_delta",
         "exit_signal_level", "exit_h4_wt1", "exit_h4_wt2", "exit_h4_delta",
+        "close_fraction", "remaining_fraction_after", "position_notional",
     ]
     for col in numeric_cols:
         if col in tdf.columns:
@@ -1162,7 +1186,8 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
     cols = [
         c for c in [
             "trade_no", "side", "entry_time", "exit_time", "entry_price",
-            "exit_price", "gross_ret", "fee_ret", "net_ret", "pnl", "fee_usd", "reason",
+            "exit_price", "close_fraction", "remaining_fraction_after",
+            "gross_ret", "fee_ret", "net_ret", "pnl", "fee_usd", "reason",
         ] if c in tdf.columns
     ]
     disp = tdf[cols].copy()
@@ -1172,6 +1197,9 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
     for col in ["pnl", "fee_usd", "entry_price", "exit_price"]:
         if col in disp.columns:
             disp[col] = disp[col].round(2)
+    for col in ["close_fraction", "remaining_fraction_after"]:
+        if col in disp.columns:
+            disp[col] = (disp[col] * 100).round(1).astype(str) + "%"
     for col in ["entry_time", "exit_time"]:
         if col in disp.columns:
             disp[col] = pd.to_datetime(disp[col]).dt.strftime("%Y-%m-%d %H:%M")
@@ -2292,6 +2320,10 @@ def sidebar():
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
+                html.Div([field("Long close zone H4", inp("inp-bt-h4-long-close-zone", DEFAULT_PARAMS["wt_h4_long_close_zone"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long TP1 %", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
                 html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
                     {"label": "Off", "value": False},
@@ -2306,7 +2338,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_3: wejście jest od razu na świeżej kropce H1 w głębokiej strefie WT, a filtr robią dwie linie WaveTrend z ostatniej zamkniętej świecy H4. Stop loss, re-entry i filtry EMA są wyłączone.",
+                "BEE4_3: wejście jest od razu na świeżej kropce H1. Long ma TP1 na 1/3 pozycji, pełne wyjście po czerwonej kropce H4 albo po trzeciej czerwonej kropce H1 w wysokiej strefie H4.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2322,26 +2354,32 @@ def sidebar():
                 {"label":"Return only", "value":"return_only"},
                 {"label":"Defensive",   "value":"defensive"},
             ],"balanced")),
-            sec("Siatka Channel"),
-            dcc.Checklist(id="chk-grid-channel",
-                options=[{"label":f" {v}","value":v}
-                         for v in WT_CHANNEL_LEN_GRID],
-                value=WT_CHANNEL_LEN_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka Average"),
-            dcc.Checklist(id="chk-grid-avg",
-                options=[{"label":f" {v}","value":v}
-                         for v in WT_AVG_LEN_GRID],
-                value=WT_AVG_LEN_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Siatka Signal"),
-            dcc.Checklist(id="chk-grid-signal",
-                options=[{"label":f" {v}","value":v} for v in WT_SIGNAL_LEN_GRID],
-                value=WT_SIGNAL_LEN_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            html.Div(
+                "WaveTrend WFO fixed: Channel 10 / Average 21 / Signal 3",
+                style={"fontSize":"11px","color":C["muted"],"marginTop":"4px","marginBottom":"8px"},
+            ),
+            html.Div([
+                sec("Siatka Channel"),
+                dcc.Checklist(id="chk-grid-channel",
+                    options=[{"label":f" {v}","value":v}
+                             for v in WT_CHANNEL_LEN_GRID],
+                    value=WT_CHANNEL_LEN_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Siatka Average"),
+                dcc.Checklist(id="chk-grid-avg",
+                    options=[{"label":f" {v}","value":v}
+                             for v in WT_AVG_LEN_GRID],
+                    value=WT_AVG_LEN_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Siatka Signal"),
+                dcc.Checklist(id="chk-grid-signal",
+                    options=[{"label":f" {v}","value":v} for v in WT_SIGNAL_LEN_GRID],
+                    value=WT_SIGNAL_LEN_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ], style={"display":"none"}),
             html.Div([
                 sec("Siatka Min level"),
                 dcc.Checklist(id="chk-grid-min-level",
@@ -2404,8 +2442,14 @@ def sidebar():
                 value=WT_H4_SHORT_FILTER_MIN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Long close zone H4"),
+            dcc.Checklist(id="chk-grid-h4-long-close-zone",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_CLOSE_ZONE_OPTIONS],
+                value=WT_H4_LONG_CLOSE_ZONE_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div(
-                "WFO w BEE4_3 testuje głębokość wejścia H1, osobne progi H4 dla long/short oraz klasyczne długości WaveTrend. Awaryjny exit H4 dla longa nie działa, gdy H1 WT1/WT2 nadal są poniżej zera i nie ma pełnego short signal.",
+                "WFO w BEE4_3 testuje głębokość wejścia H1, osobne progi H4 dla long/short oraz strefę H4 zamykania longa. TP1 jest stałe: 1/3 pozycji przy +1%.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2685,6 +2729,8 @@ def _worker(
     bt_short_zone,
     bt_h4_long,
     bt_h4_short,
+    bt_h4_long_close_zone,
+    bt_long_tp1_pct,
     grid_channel,
     grid_avg,
     grid_signal,
@@ -2697,6 +2743,7 @@ def _worker(
     grid_short_zone,
     grid_h4_long,
     grid_h4_short,
+    grid_h4_long_close_zone,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -2762,6 +2809,8 @@ def _worker(
             bt_short_zone,
             bt_h4_long,
             bt_h4_short,
+            bt_h4_long_close_zone,
+            bt_long_tp1_pct,
             fee_rate_val,
             slip_bps_val,
         )
@@ -2818,6 +2867,7 @@ def _worker(
             grid_short_zone,
             grid_h4_long,
             grid_h4_short,
+            grid_h4_long_close_zone,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3155,6 +3205,7 @@ def load_saved_result(n_clicks, filename):
     State("inp-bt-ema-len","value"),
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
     State("inp-bt-h4-long","value"), State("inp-bt-h4-short","value"),
+    State("inp-bt-h4-long-close-zone","value"), State("inp-bt-long-tp1-pct","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
@@ -3162,6 +3213,7 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     State("chk-grid-h4-long","value"), State("chk-grid-h4-short","value"),
+    State("chk-grid-h4-long-close-zone","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3169,9 +3221,10 @@ def on_run_stop(nr, ns,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
+    bt_h4_long_close_zone, bt_long_tp1_pct,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-    grid_h4_long, grid_h4_short):
+    grid_h4_long, grid_h4_short, grid_h4_long_close_zone):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3195,9 +3248,10 @@ def on_run_stop(nr, ns,
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
+            bt_h4_long_close_zone, bt_long_tp1_pct,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-            grid_h4_long, grid_h4_short,
+            grid_h4_long, grid_h4_short, grid_h4_long_close_zone,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

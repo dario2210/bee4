@@ -21,7 +21,7 @@ from bee4_data import (
 from bee4_params import WT_ZERO_LINE
 
 Side = Literal["long", "short"]
-Action = Literal["none", "open_long", "open_short", "close_reverse", "close_force"]
+Action = Literal["none", "open_long", "open_short", "close_reverse", "close_force", "close_partial"]
 
 
 @dataclass
@@ -69,6 +69,9 @@ class PositionState:
     entry_meta: dict = field(default_factory=dict)
     stop_price: float = np.nan
     entry_atr: float = np.nan
+    remaining_fraction: float = 1.0
+    tp1_taken: bool = False
+    h1_red_close_count: int = 0
 
 
 def compute_trade_close(
@@ -150,6 +153,31 @@ def _h1_below_zero(bar: BarData, zero_line: float) -> bool:
         and not np.isnan(bar.wt2)
         and bar.wt1 < zero_line
         and bar.wt2 < zero_line
+    )
+
+
+def _h4_value_changed(bar: BarData, prev_bar: BarData) -> bool:
+    if any(np.isnan(v) for v in [bar.h4_wt1, bar.h4_wt2, prev_bar.h4_wt1, prev_bar.h4_wt2]):
+        return False
+    return bar.h4_wt1 != prev_bar.h4_wt1 or bar.h4_wt2 != prev_bar.h4_wt2
+
+
+def _h4_cross_down(bar: BarData, prev_bar: BarData) -> bool:
+    if any(np.isnan(v) for v in [bar.h4_wt_delta, prev_bar.h4_wt_delta]):
+        return False
+    prev_delta = bar.h4_prev_wt_delta if not np.isnan(bar.h4_prev_wt_delta) else prev_bar.h4_wt_delta
+    if np.isnan(prev_delta):
+        return False
+    return _h4_value_changed(bar, prev_bar) and prev_delta >= 0.0 and bar.h4_wt_delta < 0.0
+
+
+def _h4_long_close_zone_ok(bar: BarData, params: dict) -> bool:
+    threshold = float(params.get("wt_h4_long_close_zone", 40.0))
+    return (
+        not np.isnan(bar.h4_wt1)
+        and not np.isnan(bar.h4_wt2)
+        and bar.h4_wt1 >= threshold
+        and bar.h4_wt2 >= threshold
     )
 
 
@@ -346,6 +374,50 @@ def generate_entry_signal(
     return Signal(action="none")
 
 
+def generate_partial_exit_signal(
+    bar: BarData,
+    params: dict,
+    position: PositionState,
+) -> Signal:
+    """Partial TP management for long positions."""
+    if position.side != "long":
+        return Signal(action="none")
+    if position.tp1_taken or position.remaining_fraction <= 0.0:
+        return Signal(action="none")
+    if not bool(params.get("wt_long_tp1_enabled", True)):
+        return Signal(action="none")
+
+    tp_pct = float(params.get("wt_long_tp1_pct", 0.01) or 0.0)
+    close_fraction = float(params.get("wt_long_tp1_fraction", 1.0 / 3.0) or 0.0)
+    if tp_pct <= 0.0 or close_fraction <= 0.0:
+        return Signal(action="none")
+
+    target_price = position.entry_price * (1.0 + tp_pct)
+    if np.isnan(bar.high) or bar.high < target_price:
+        return Signal(action="none")
+
+    close_fraction = min(close_fraction, position.remaining_fraction)
+    return Signal(
+        action="close_partial",
+        reason="LONG_TP1_PARTIAL",
+        exit_price=target_price,
+        meta={
+            "exit_wt1": round(bar.wt1, 4),
+            "exit_wt2": round(bar.wt2, 4),
+            "exit_delta": round(bar.wt_delta, 4),
+            "exit_signal_level": round(_signal_level(bar), 4),
+            "bars_in_position": position.bars_in_position,
+            "exit_trigger": "LONG_TP1_PARTIAL",
+            "exit_h4_wt1": round(bar.h4_wt1, 4) if not np.isnan(bar.h4_wt1) else np.nan,
+            "exit_h4_wt2": round(bar.h4_wt2, 4) if not np.isnan(bar.h4_wt2) else np.nan,
+            "exit_h4_delta": round(bar.h4_wt_delta, 4) if not np.isnan(bar.h4_wt_delta) else np.nan,
+            "close_fraction": close_fraction,
+            "remaining_fraction_before": position.remaining_fraction,
+            "tp1_pct": tp_pct,
+        },
+    )
+
+
 def generate_exit_signal(
     bar: BarData,
     prev_bar: BarData,
@@ -353,9 +425,10 @@ def generate_exit_signal(
     position: PositionState,
 ) -> Signal:
     """
-    Exit logic for BEE4_2:
+    Exit logic for BEE4_3:
       - no stop-loss / break-even / trailing by default
-      - emergency close if the H4 WaveTrend setup is invalidated
+      - H4 red dot closes the remaining long
+      - three H1 red dots close the remaining long when H4 is above the close zone
       - close or reverse only when the opposite H1 cross + H4 filter appears
     """
     position.bars_in_position += 1
@@ -399,6 +472,23 @@ def generate_exit_signal(
                 reason="WT_H1_RED_DOT_H4_FILTER_EXIT_LONG",
                 meta=_meta("WT_H1_RED_DOT_H4_FILTER_EXIT_LONG"),
             )
+        if _h4_cross_down(bar, prev_bar):
+            return Signal(
+                action="close_force",
+                reason="WT_H4_RED_DOT_EXIT_LONG",
+                meta=_meta("WT_H4_RED_DOT_EXIT_LONG"),
+            )
+        if _cross_down(bar, prev_bar) and _h4_long_close_zone_ok(bar, params):
+            position.h1_red_close_count += 1
+            if position.h1_red_close_count >= 3:
+                meta = _meta("WT_H1_THIRD_RED_DOT_H4_CLOSE_ZONE_EXIT_LONG")
+                meta["h1_red_close_count"] = position.h1_red_close_count
+                meta["wt_h4_long_close_zone"] = float(params.get("wt_h4_long_close_zone", 40.0))
+                return Signal(
+                    action="close_force",
+                    reason="WT_H1_THIRD_RED_DOT_H4_CLOSE_ZONE_EXIT_LONG",
+                    meta=meta,
+                )
 
     if position.side == "short":
         if opposite_signal.action == "open_long":

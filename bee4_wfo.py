@@ -37,6 +37,8 @@ from bee4_params import (
     WT_REENTRY_WINDOW_GRID,
     WT_H4_LONG_FILTER_MAX,
     WT_H4_LONG_FILTER_MAX_GRID,
+    WT_H4_LONG_CLOSE_ZONE,
+    WT_H4_LONG_CLOSE_ZONE_GRID,
     WT_H4_SHORT_FILTER_MIN,
     WT_H4_SHORT_FILTER_MIN_GRID,
     WT_SHORT_REQUIRE_HTF_TREND,
@@ -156,6 +158,11 @@ def walk_forward_optimization(
         WT_H4_SHORT_FILTER_MIN_GRID,
         float,
     )
+    h4_long_close_zone_grid = _clean_grid(
+        grid_overrides.get("wt_h4_long_close_zone"),
+        WT_H4_LONG_CLOSE_ZONE_GRID,
+        float,
+    )
 
     n = len(df)
     start = 0
@@ -181,7 +188,8 @@ def walk_forward_optimization(
         * len(long_zone_grid)
         * len(short_zone_grid)
         * len(h4_long_filter_grid)
-        * len(h4_short_filter_grid),
+        * len(h4_short_filter_grid)
+        * len(h4_long_close_zone_grid),
     )
     combo_progress_step = max(1, combo_total // 20)
     if verbose:
@@ -214,6 +222,7 @@ def walk_forward_optimization(
             "wt_short_entry_min_below_zero",
             "wt_h4_long_filter_max",
             "wt_h4_short_filter_min",
+            "wt_h4_long_close_zone",
         ]
         best_score = -1e9
         best_params = None
@@ -238,6 +247,7 @@ def walk_forward_optimization(
             wt_short_entry_min_below_zero,
             wt_h4_long_filter_max,
             wt_h4_short_filter_min,
+            wt_h4_long_close_zone,
         ) in product(
             channel_grid,
             avg_grid,
@@ -251,6 +261,7 @@ def walk_forward_optimization(
             short_zone_grid,
             h4_long_filter_grid,
             h4_short_filter_grid,
+            h4_long_close_zone_grid,
         ):
             if should_stop is not None and should_stop():
                 stopped = True
@@ -282,6 +293,7 @@ def walk_forward_optimization(
                     "wt_short_entry_min_below_zero": wt_short_entry_min_below_zero,
                     "wt_h4_long_filter_max": wt_h4_long_filter_max,
                     "wt_h4_short_filter_min": wt_h4_short_filter_min,
+                    "wt_h4_long_close_zone": wt_h4_long_close_zone,
                 }
             )
             strat = Bee4Strategy(params, fee_rate=fee_rate)
@@ -354,6 +366,7 @@ def walk_forward_optimization(
             trades_live["wt_short_entry_min_below_zero"] = best_params["wt_short_entry_min_below_zero"]
             trades_live["wt_h4_long_filter_max"] = best_params.get("wt_h4_long_filter_max", WT_H4_LONG_FILTER_MAX)
             trades_live["wt_h4_short_filter_min"] = best_params.get("wt_h4_short_filter_min", WT_H4_SHORT_FILTER_MIN)
+            trades_live["wt_h4_long_close_zone"] = best_params.get("wt_h4_long_close_zone", WT_H4_LONG_CLOSE_ZONE)
             trades_live["trade_direction"] = best_params.get("trade_direction", "both")
             trades_live["allow_longs"] = bool(best_params.get("allow_longs", True))
             trades_live["allow_shorts"] = bool(best_params.get("allow_shorts", True))
@@ -386,6 +399,7 @@ def walk_forward_optimization(
                 "best_wt_short_entry_min_below_zero": best_params["wt_short_entry_min_below_zero"],
                 "best_wt_h4_long_filter_max": best_params.get("wt_h4_long_filter_max", WT_H4_LONG_FILTER_MAX),
                 "best_wt_h4_short_filter_min": best_params.get("wt_h4_short_filter_min", WT_H4_SHORT_FILTER_MIN),
+                "best_wt_h4_long_close_zone": best_params.get("wt_h4_long_close_zone", WT_H4_LONG_CLOSE_ZONE),
                 "trade_direction": best_params.get("trade_direction", "both"),
                 "allow_longs": bool(best_params.get("allow_longs", True)),
                 "allow_shorts": bool(best_params.get("allow_shorts", True)),
@@ -497,6 +511,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_h4_short_filter_min" in recent.columns
         else WT_H4_SHORT_FILTER_MIN
     )
+    h4_long_close_zone = (
+        float(recent["best_wt_h4_long_close_zone"].mode().iloc[0])
+        if "best_wt_h4_long_close_zone" in recent.columns
+        else WT_H4_LONG_CLOSE_ZONE
+    )
     allow_longs = (
         bool(recent["allow_longs"].mode().iloc[0])
         if "allow_longs" in recent.columns
@@ -532,5 +551,6 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_short_entry_min_below_zero": short_entry_min_below_zero,
         "wt_h4_long_filter_max": h4_long_filter_max,
         "wt_h4_short_filter_min": h4_short_filter_min,
+        "wt_h4_long_close_zone": h4_long_close_zone,
     }
 

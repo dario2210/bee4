@@ -21,6 +21,7 @@ from bee4_engine import (
     compute_trade_close,
     generate_entry_signal,
     generate_exit_signal,
+    generate_partial_exit_signal,
 )
 from bee4_params import FEE_RATE
 
@@ -66,6 +67,8 @@ class TradeRecord:
     exit_h4_wt1: float = 0.0
     exit_h4_wt2: float = 0.0
     exit_h4_delta: float = 0.0
+    close_fraction: float = 1.0
+    remaining_fraction_after: float = 0.0
 
 
 class Bee4Strategy:
@@ -88,13 +91,16 @@ class Bee4Strategy:
             self.slippage_bps,
             self.spread_bps,
         )
+        requested_fraction = float((signal.meta or {}).get("close_fraction", pos.remaining_fraction))
+        close_fraction = min(max(requested_fraction, 0.0), pos.remaining_fraction)
+        close_notional = capital_at_open * close_fraction
 
         result = compute_trade_close(
             entry_price=pos.entry_price,
             exit_price=exit_price,
             side=pos.side,
             fee_rate=self.fee_rate,
-            capital_at_open=capital_at_open,
+            capital_at_open=close_notional,
         )
         gross_ret = result["gross_ret"]
         net_ret = result["net_ret"]
@@ -102,11 +108,12 @@ class Bee4Strategy:
         fee_usd = result["fee_usd"]
         pnl = result["pnl"]
         slip_delta = abs(exit_price - raw_exit)
-        slippage_usd = (slip_delta / pos.entry_price) * capital_at_open if pos.entry_price else 0.0
+        slippage_usd = (slip_delta / pos.entry_price) * close_notional if pos.entry_price else 0.0
         new_capital = capital + pnl
 
         em = entry_meta or pos.entry_meta or {}
         xm = signal.meta or {}
+        remaining_after = max(0.0, pos.remaining_fraction - close_fraction)
 
         rec = TradeRecord(
             side=pos.side,
@@ -119,9 +126,9 @@ class Bee4Strategy:
             net_ret=net_ret,
             pnl=pnl,
             reason=signal.reason,
-            capital_before=capital_at_open,
+            capital_before=capital,
             capital_after=new_capital,
-            position_notional=capital_at_open,
+            position_notional=close_notional,
             fee_usd=fee_usd,
             slippage_usd=slippage_usd,
             entry_wt1=em.get("entry_wt1", 0.0),
@@ -148,8 +155,15 @@ class Bee4Strategy:
             exit_h4_wt1=xm.get("exit_h4_wt1", 0.0),
             exit_h4_wt2=xm.get("exit_h4_wt2", 0.0),
             exit_h4_delta=xm.get("exit_h4_delta", 0.0),
+            close_fraction=close_fraction,
+            remaining_fraction_after=remaining_after,
         )
-        self.position = None
+        if signal.action == "close_partial" and remaining_after > 1e-9:
+            pos.remaining_fraction = remaining_after
+            pos.tp1_taken = True
+            self.position = pos
+        else:
+            self.position = None
         return rec, new_capital
 
     def run(self, df, initial_capital):
@@ -170,6 +184,13 @@ class Bee4Strategy:
 
             if any(np.isnan(v) for v in [bar.wt1, bar.wt2, prev.wt1, prev.wt2]):
                 continue
+
+            if self.position is not None:
+                sig = generate_partial_exit_signal(bar, self.params, self.position)
+                if sig.action != "none":
+                    rec, capital = self._close_position(capital, bar, sig, capital_at_open)
+                    trades.append(rec)
+                    equity_curve.append((bar.time, capital))
 
             if self.position is not None:
                 sig = generate_exit_signal(bar, prev, self.params, self.position)
@@ -252,6 +273,8 @@ class Bee4Strategy:
             "exit_h4_wt1",
             "exit_h4_wt2",
             "exit_h4_delta",
+            "close_fraction",
+            "remaining_fraction_after",
         ]
 
         if trades:
