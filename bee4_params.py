@@ -29,9 +29,10 @@ WT_AVG_LEN = 21
 WT_SIGNAL_LEN = 3
 WT_MIN_SIGNAL_LEVEL = 0.0
 WT_ZERO_LINE = 0.0
-TRADE_DIRECTION = "both"
+TRADE_DIRECTION = "long"
 ALLOW_LONGS = True
-ALLOW_SHORTS = True
+ALLOW_SHORTS = False
+SHORT_TRADING_ENABLED = False
 WT_LONG_ENTRY_WINDOW_BARS = 0
 WT_LONG_ENTRY_MAX_ABOVE_ZERO = -30.0
 WT_LONG_EXIT_MIN_LEVEL = 0.0
@@ -51,6 +52,11 @@ WT_H4_SHORT_FILTER_MIN = 50.0
 WT_LONG_TP1_ENABLED = True
 WT_LONG_TP1_PCT = 0.01
 WT_LONG_TP1_FRACTION = 1.0 / 3.0
+WT_LONG_TP2_ENABLED = True
+WT_LONG_TP2_PCT = 0.02
+WT_LONG_TP2_FRACTION = 1.0 / 3.0
+WT_LONG_EMERGENCY_SL_ENABLED = True
+WT_LONG_EMERGENCY_SL_CAPITAL_PCT = 0.01
 WT_SHORT_TP1_ENABLED = True
 WT_SHORT_TP1_PCT = 0.01
 WT_SHORT_TP1_FRACTION = 1.0 / 3.0
@@ -112,6 +118,7 @@ DEFAULT_PARAMS = {
     "trade_direction": TRADE_DIRECTION,
     "allow_longs": ALLOW_LONGS,
     "allow_shorts": ALLOW_SHORTS,
+    "short_trading_enabled": SHORT_TRADING_ENABLED,
     "wt_long_entry_window_bars": WT_LONG_ENTRY_WINDOW_BARS,
     "wt_long_entry_max_above_zero": WT_LONG_ENTRY_MAX_ABOVE_ZERO,
     "wt_long_exit_min_level": WT_LONG_EXIT_MIN_LEVEL,
@@ -129,6 +136,11 @@ DEFAULT_PARAMS = {
     "wt_long_tp1_enabled": WT_LONG_TP1_ENABLED,
     "wt_long_tp1_pct": WT_LONG_TP1_PCT,
     "wt_long_tp1_fraction": WT_LONG_TP1_FRACTION,
+    "wt_long_tp2_enabled": WT_LONG_TP2_ENABLED,
+    "wt_long_tp2_pct": WT_LONG_TP2_PCT,
+    "wt_long_tp2_fraction": WT_LONG_TP2_FRACTION,
+    "wt_long_emergency_sl_enabled": WT_LONG_EMERGENCY_SL_ENABLED,
+    "wt_long_emergency_sl_capital_pct": WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
     "wt_short_tp1_enabled": WT_SHORT_TP1_ENABLED,
     "wt_short_tp1_pct": WT_SHORT_TP1_PCT,
     "wt_short_tp1_fraction": WT_SHORT_TP1_FRACTION,
@@ -173,6 +185,13 @@ def load_params() -> dict:
             print(f"[params] Could not load {WFO_BEST_PARAMS_PATH}: {exc!r}")
     else:
         print(f"[params] Missing {WFO_BEST_PARAMS_PATH} - using DEFAULT_PARAMS")
+
+    # BEE4_3 is temporarily long-only. Keep this enforced even when older WFO
+    # result files still contain allow_shorts=true.
+    params["trade_direction"] = "long"
+    params["allow_longs"] = True
+    params["allow_shorts"] = False
+    params["short_trading_enabled"] = False
 
     return params
 

@@ -19,6 +19,7 @@ from bee4_engine import (
     bar_from_row,
     build_position_state,
     compute_trade_close,
+    generate_emergency_exit_signal,
     generate_entry_signal,
     generate_exit_signal,
     generate_partial_exit_signal,
@@ -63,6 +64,8 @@ class TradeRecord:
     exit_zone: str = ""
     exit_signal_level: float = 0.0
     exit_bars: int = 0
+    holding_hours: float = np.nan
+    time_to_tp1_hours: float = np.nan
     exit_trigger: str = ""
     exit_h4_wt1: float = 0.0
     exit_h4_wt2: float = 0.0
@@ -88,8 +91,23 @@ class Bee4Strategy:
     @staticmethod
     def _trade_event(signal: Signal) -> str:
         if signal.action == "close_partial":
+            if "TP2" in signal.reason:
+                return "TP2"
+            if "TP1" in signal.reason:
+                return "TP1"
             return "TP"
         return "EXIT"
+
+    @staticmethod
+    def _holding_hours(entry_time, exit_time) -> float:
+        try:
+            start = pd.to_datetime(entry_time, utc=True)
+            end = pd.to_datetime(exit_time, utc=True)
+            if pd.isna(start) or pd.isna(end):
+                return np.nan
+            return max(0.0, (end - start).total_seconds() / 3600.0)
+        except Exception:
+            return np.nan
 
     def _close_position(self, capital, bar, signal, capital_at_open, entry_meta=None):
         pos = self.position
@@ -127,6 +145,8 @@ class Bee4Strategy:
         trade_id = int(pos.trade_id or 0)
         trade_event = self._trade_event(signal)
         trade_label = f"{trade_id} {trade_event}".strip()
+        holding_hours = self._holding_hours(pos.entry_time, bar.time)
+        time_to_tp1_hours = holding_hours if trade_event == "TP1" else np.nan
 
         rec = TradeRecord(
             side=pos.side,
@@ -164,6 +184,8 @@ class Bee4Strategy:
             exit_zone=xm.get("exit_zone", ""),
             exit_signal_level=xm.get("exit_signal_level", 0.0),
             exit_bars=xm.get("bars_in_position", 0),
+            holding_hours=holding_hours,
+            time_to_tp1_hours=time_to_tp1_hours,
             exit_trigger=xm.get("exit_trigger", signal.reason),
             exit_h4_wt1=xm.get("exit_h4_wt1", 0.0),
             exit_h4_wt2=xm.get("exit_h4_wt2", 0.0),
@@ -176,7 +198,10 @@ class Bee4Strategy:
         )
         if signal.action == "close_partial" and remaining_after > 1e-9:
             pos.remaining_fraction = remaining_after
-            pos.tp1_taken = True
+            if "TP2" in signal.reason:
+                pos.tp2_taken = True
+            elif "TP1" in signal.reason:
+                pos.tp1_taken = True
             self.position = pos
         else:
             self.position = None
@@ -203,11 +228,23 @@ class Bee4Strategy:
                 continue
 
             if self.position is not None:
-                sig = generate_partial_exit_signal(bar, self.params, self.position)
+                sig = generate_emergency_exit_signal(bar, self.params, self.position)
                 if sig.action != "none":
                     rec, capital = self._close_position(capital, bar, sig, capital_at_open)
                     trades.append(rec)
                     equity_curve.append((bar.time, capital))
+
+            if self.position is not None:
+                partial_guard = 0
+                sig = generate_partial_exit_signal(bar, self.params, self.position)
+                while sig.action != "none" and self.position is not None and partial_guard < 3:
+                    rec, capital = self._close_position(capital, bar, sig, capital_at_open)
+                    trades.append(rec)
+                    equity_curve.append((bar.time, capital))
+                    partial_guard += 1
+                    if self.position is None:
+                        break
+                    sig = generate_partial_exit_signal(bar, self.params, self.position)
 
             if self.position is not None:
                 sig = generate_exit_signal(bar, prev, self.params, self.position)
@@ -288,6 +325,8 @@ class Bee4Strategy:
             "exit_zone",
             "exit_signal_level",
             "exit_bars",
+            "holding_hours",
+            "time_to_tp1_hours",
             "exit_trigger",
             "exit_h4_wt1",
             "exit_h4_wt2",

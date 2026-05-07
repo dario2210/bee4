@@ -19,6 +19,7 @@ from bee4_params import (
     INITIAL_CAPITAL,
     LIVE_DAYS,
     OPT_DAYS,
+    SHORT_TRADING_ENABLED,
     WT_AVG_LEN,
     WT_AVG_LEN_GRID,
     WT_CHANNEL_LEN,
@@ -127,6 +128,7 @@ def walk_forward_optimization(
     opt_capital = float(initial_capital)
     base_params = dict(base_params or {})
     grid_overrides = grid_overrides or {}
+    shorts_enabled = bool(base_params.get("short_trading_enabled", SHORT_TRADING_ENABLED))
 
     channel_grid = _clean_grid(grid_overrides.get("wt_channel_len"), WT_CHANNEL_LEN_GRID, int)
     avg_grid = _clean_grid(grid_overrides.get("wt_avg_len"), WT_AVG_LEN_GRID, int)
@@ -141,20 +143,28 @@ def walk_forward_optimization(
         WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
         float,
     )
-    short_zone_grid = _clean_grid(
-        grid_overrides.get("wt_short_entry_min_below_zero"),
-        WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
-        float,
+    short_zone_grid = (
+        _clean_grid(
+            grid_overrides.get("wt_short_entry_min_below_zero"),
+            WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
+            float,
+        )
+        if shorts_enabled
+        else [WT_SHORT_ENTRY_MIN_BELOW_ZERO]
     )
     h4_long_filter_grid = _clean_grid(
         grid_overrides.get("wt_h4_long_filter_max"),
         WT_H4_LONG_FILTER_MAX_GRID,
         float,
     )
-    h4_short_filter_grid = _clean_grid(
-        grid_overrides.get("wt_h4_short_filter_min"),
-        WT_H4_SHORT_FILTER_MIN_GRID,
-        float,
+    h4_short_filter_grid = (
+        _clean_grid(
+            grid_overrides.get("wt_h4_short_filter_min"),
+            WT_H4_SHORT_FILTER_MIN_GRID,
+            float,
+        )
+        if shorts_enabled
+        else [WT_H4_SHORT_FILTER_MIN]
     )
     n = len(df)
     start = 0
@@ -210,10 +220,10 @@ def walk_forward_optimization(
             "wt_long_require_htf_trend",
             "wt_ema_filter_len",
             "wt_long_entry_max_above_zero",
-            "wt_short_entry_min_below_zero",
             "wt_h4_long_filter_max",
-            "wt_h4_short_filter_min",
         ]
+        if shorts_enabled:
+            selection_keys.extend(["wt_short_entry_min_below_zero", "wt_h4_short_filter_min"])
         best_score = -1e9
         best_params = None
         best_opt_trades = None
@@ -283,6 +293,15 @@ def walk_forward_optimization(
                     "wt_h4_short_filter_min": wt_h4_short_filter_min,
                 }
             )
+            if not shorts_enabled:
+                params.update(
+                    {
+                        "trade_direction": "long",
+                        "allow_longs": True,
+                        "allow_shorts": False,
+                        "short_trading_enabled": False,
+                    }
+                )
             strat = Bee4Strategy(params, fee_rate=fee_rate)
             trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
             score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)
@@ -353,9 +372,10 @@ def walk_forward_optimization(
             trades_live["wt_short_entry_min_below_zero"] = best_params["wt_short_entry_min_below_zero"]
             trades_live["wt_h4_long_filter_max"] = best_params.get("wt_h4_long_filter_max", WT_H4_LONG_FILTER_MAX)
             trades_live["wt_h4_short_filter_min"] = best_params.get("wt_h4_short_filter_min", WT_H4_SHORT_FILTER_MIN)
-            trades_live["trade_direction"] = best_params.get("trade_direction", "both")
+            trades_live["trade_direction"] = best_params.get("trade_direction", "long")
             trades_live["allow_longs"] = bool(best_params.get("allow_longs", True))
-            trades_live["allow_shorts"] = bool(best_params.get("allow_shorts", True))
+            trades_live["allow_shorts"] = bool(best_params.get("allow_shorts", False))
+            trades_live["short_trading_enabled"] = bool(best_params.get("short_trading_enabled", False))
             all_live_trades.append(trades_live)
 
         if equity_live is not None and not equity_live.empty:
@@ -385,9 +405,10 @@ def walk_forward_optimization(
                 "best_wt_short_entry_min_below_zero": best_params["wt_short_entry_min_below_zero"],
                 "best_wt_h4_long_filter_max": best_params.get("wt_h4_long_filter_max", WT_H4_LONG_FILTER_MAX),
                 "best_wt_h4_short_filter_min": best_params.get("wt_h4_short_filter_min", WT_H4_SHORT_FILTER_MIN),
-                "trade_direction": best_params.get("trade_direction", "both"),
+                "trade_direction": best_params.get("trade_direction", "long"),
                 "allow_longs": bool(best_params.get("allow_longs", True)),
-                "allow_shorts": bool(best_params.get("allow_shorts", True)),
+                "allow_shorts": bool(best_params.get("allow_shorts", False)),
+                "short_trading_enabled": bool(best_params.get("short_trading_enabled", False)),
                 "opt_score": best_score,
                 "opt_return_pct": opt_ret_pct,
                 "opt_pf": opt_pf,
@@ -410,9 +431,8 @@ def walk_forward_optimization(
                 f"ch={best_params['wt_channel_len']} avg={best_params['wt_avg_len']} "
                 f"sig={best_params['wt_signal_len']} minlvl={best_params['wt_min_signal_level']:.1f} "
                 f"lz={best_params['wt_long_entry_max_above_zero']:.1f} "
-                f"sz={best_params['wt_short_entry_min_below_zero']:.1f} "
                 f"h4lz={best_params.get('wt_h4_long_filter_max', WT_H4_LONG_FILTER_MAX):.1f} "
-                f"h4sz={best_params.get('wt_h4_short_filter_min', WT_H4_SHORT_FILTER_MIN):.1f}"
+                f"short=off"
             )
 
         if on_window_done is not None:
@@ -496,26 +516,15 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_h4_short_filter_min" in recent.columns
         else WT_H4_SHORT_FILTER_MIN
     )
-    allow_longs = (
-        bool(recent["allow_longs"].mode().iloc[0])
-        if "allow_longs" in recent.columns
-        else True
-    )
-    allow_shorts = (
-        bool(recent["allow_shorts"].mode().iloc[0])
-        if "allow_shorts" in recent.columns
-        else True
-    )
-    trade_direction = "both"
-    if allow_longs and not allow_shorts:
-        trade_direction = "long"
-    elif allow_shorts and not allow_longs:
-        trade_direction = "short"
+    allow_longs = True
+    allow_shorts = False
+    trade_direction = "long"
 
     return {
         "trade_direction": trade_direction,
         "allow_longs": allow_longs,
         "allow_shorts": allow_shorts,
+        "short_trading_enabled": False,
         "wt_channel_len": channel_len,
         "wt_avg_len": avg_len,
         "wt_signal_len": signal_len,

@@ -18,7 +18,7 @@ from bee4_data import (
     htf_wt2_column,
     wt_columns,
 )
-from bee4_params import WT_ZERO_LINE
+from bee4_params import SHORT_TRADING_ENABLED, WT_ZERO_LINE
 
 Side = Literal["long", "short"]
 Action = Literal["none", "open_long", "open_short", "close_force", "close_partial"]
@@ -71,6 +71,7 @@ class PositionState:
     entry_atr: float = np.nan
     remaining_fraction: float = 1.0
     tp1_taken: bool = False
+    tp2_taken: bool = False
     h1_red_close_count: int = 0
     h1_green_close_count: int = 0
     trade_id: int = 0
@@ -118,6 +119,12 @@ def build_position_state(
         offset = bar.atr * atr_mult
         stop_price = entry_price - offset if side == "long" else entry_price + offset
         entry_atr = float(bar.atr)
+    elif side == "long" and bool(params.get("wt_long_emergency_sl_enabled", True)):
+        emergency_pct = float(
+            params.get("wt_long_emergency_sl_capital_pct", params.get("wt_long_emergency_sl_pct", 0.01)) or 0.0
+        )
+        if emergency_pct > 0.0:
+            stop_price = entry_price * (1.0 - emergency_pct)
 
     return PositionState(
         side=side,
@@ -218,7 +225,8 @@ def _htf_trend_ok(bar: BarData, side: Side, required: bool) -> bool:
 
 def _direction_flags(params: dict) -> tuple[bool, bool]:
     allow_longs = bool(params.get("allow_longs", True))
-    allow_shorts = bool(params.get("allow_shorts", True))
+    shorts_enabled = bool(params.get("short_trading_enabled", SHORT_TRADING_ENABLED))
+    allow_shorts = bool(params.get("allow_shorts", True)) and shorts_enabled
     return allow_longs, allow_shorts
 
 
@@ -268,7 +276,7 @@ def generate_entry_signal(
     position: Optional[PositionState],
 ) -> Signal:
     """
-    Entry logic for BEE4_2:
+    Entry logic for BEE4_3:
       - long immediately on fresh H1 bullish cross in a deep negative H1 zone
       - short immediately on fresh H1 bearish cross in a deep positive H1 zone
       - both entries are filtered by H4 WaveTrend zone + convergence
@@ -352,27 +360,87 @@ def generate_entry_signal(
     return Signal(action="none")
 
 
+def generate_emergency_exit_signal(
+    bar: BarData,
+    params: dict,
+    position: PositionState,
+) -> Signal:
+    """Emergency risk exit checked before partial profit taking."""
+    if position.side != "long":
+        return Signal(action="none")
+
+    emergency_sl_enabled = bool(params.get("wt_long_emergency_sl_enabled", True))
+    emergency_capital_pct = float(
+        params.get("wt_long_emergency_sl_capital_pct", params.get("wt_long_emergency_sl_pct", 0.01)) or 0.0
+    )
+    remaining_fraction = max(float(position.remaining_fraction), 1e-9)
+    emergency_price_pct = emergency_capital_pct / remaining_fraction
+    emergency_stop = position.entry_price * (1.0 - emergency_price_pct)
+    if (
+        not emergency_sl_enabled
+        or emergency_capital_pct <= 0.0
+        or emergency_stop <= 0.0
+        or np.isnan(bar.low)
+        or bar.low > emergency_stop
+    ):
+        return Signal(action="none")
+
+    return Signal(
+        action="close_force",
+        reason="LONG_EMERGENCY_SL_1PCT",
+        exit_price=emergency_stop,
+        meta={
+            "exit_wt1": round(bar.wt1, 4),
+            "exit_wt2": round(bar.wt2, 4),
+            "exit_delta": round(bar.wt_delta, 4),
+            "exit_signal_level": round(_signal_level(bar), 4),
+            "bars_in_position": position.bars_in_position,
+            "exit_trigger": "LONG_EMERGENCY_SL_1PCT",
+            "stop_price": round(emergency_stop, 4),
+            "emergency_sl_capital_pct": emergency_capital_pct,
+            "emergency_sl_price_pct": emergency_price_pct,
+            "remaining_fraction_before": position.remaining_fraction,
+            "exit_h4_wt1": round(bar.h4_wt1, 4) if not np.isnan(bar.h4_wt1) else np.nan,
+            "exit_h4_wt2": round(bar.h4_wt2, 4) if not np.isnan(bar.h4_wt2) else np.nan,
+            "exit_h4_delta": round(bar.h4_wt_delta, 4) if not np.isnan(bar.h4_wt_delta) else np.nan,
+        },
+    )
+
+
 def generate_partial_exit_signal(
     bar: BarData,
     params: dict,
     position: PositionState,
 ) -> Signal:
     """Partial TP management for long and short positions."""
-    if position.tp1_taken or position.remaining_fraction <= 0.0:
+    if position.remaining_fraction <= 0.0:
         return Signal(action="none")
 
     if position.side == "long":
-        if not bool(params.get("wt_long_tp1_enabled", True)):
+        if not position.tp1_taken:
+            if not bool(params.get("wt_long_tp1_enabled", True)):
+                return Signal(action="none")
+            tp_name = "TP1"
+            tp_pct = float(params.get("wt_long_tp1_pct", 0.01) or 0.0)
+            close_fraction = float(params.get("wt_long_tp1_fraction", 1.0 / 3.0) or 0.0)
+        elif not position.tp2_taken:
+            if not bool(params.get("wt_long_tp2_enabled", True)):
+                return Signal(action="none")
+            tp_name = "TP2"
+            tp_pct = float(params.get("wt_long_tp2_pct", 0.02) or 0.0)
+            close_fraction = float(params.get("wt_long_tp2_fraction", 1.0 / 3.0) or 0.0)
+        else:
             return Signal(action="none")
-        tp_pct = float(params.get("wt_long_tp1_pct", 0.01) or 0.0)
-        close_fraction = float(params.get("wt_long_tp1_fraction", 1.0 / 3.0) or 0.0)
         target_price = position.entry_price * (1.0 + tp_pct)
         if np.isnan(bar.high) or bar.high < target_price:
             return Signal(action="none")
-        reason = "LONG_TP1_PARTIAL"
+        reason = f"LONG_{tp_name}_PARTIAL"
     else:
+        if position.tp1_taken:
+            return Signal(action="none")
         if not bool(params.get("wt_short_tp1_enabled", True)):
             return Signal(action="none")
+        tp_name = "TP1"
         tp_pct = float(params.get("wt_short_tp1_pct", params.get("wt_long_tp1_pct", 0.01)) or 0.0)
         close_fraction = float(
             params.get("wt_short_tp1_fraction", params.get("wt_long_tp1_fraction", 1.0 / 3.0)) or 0.0
@@ -402,7 +470,8 @@ def generate_partial_exit_signal(
             "exit_h4_delta": round(bar.h4_wt_delta, 4) if not np.isnan(bar.h4_wt_delta) else np.nan,
             "close_fraction": close_fraction,
             "remaining_fraction_before": position.remaining_fraction,
-            "tp1_pct": tp_pct,
+            "tp_level": tp_name,
+            "tp_pct": tp_pct,
         },
     )
 
@@ -415,9 +484,8 @@ def generate_exit_signal(
 ) -> Signal:
     """
     Exit logic for BEE4_3:
-      - no stop-loss / break-even / trailing by default
-      - H4 red dot closes the remaining long
-      - three H1 red dots close the remaining long when H4 WT lines converge
+      - emergency long stop closes the remaining position at -1% from entry
+      - first H1 red dot closes the remaining long when H4 WT lines converge
       - H4 green dot / three H1 green dots close the remaining short symmetrically
       - opposite entry signals do not close/reverse an active position
     """
@@ -445,20 +513,18 @@ def generate_exit_signal(
         return Signal(action="close_force", reason="TIME_STOP", meta=_meta("TIME_STOP"))
 
     if position.side == "long":
-        if _h4_cross_down(bar, prev_bar):
-            return Signal(
-                action="close_force",
-                reason="WT_H4_RED_DOT_EXIT_LONG",
-                meta=_meta("WT_H4_RED_DOT_EXIT_LONG"),
-            )
+        emergency_sig = generate_emergency_exit_signal(bar, params, position)
+        if emergency_sig.action != "none":
+            emergency_sig.meta["bars_in_position"] = position.bars_in_position
+            return emergency_sig
         if _cross_down(bar, prev_bar):
             position.h1_red_close_count += 1
-            if position.h1_red_close_count >= 3 and _h4_gap_converging(bar):
-                meta = _meta("WT_H1_THIRD_RED_DOT_H4_CONVERGENCE_EXIT_LONG")
+            if position.h1_red_close_count >= 1 and _h4_gap_converging(bar):
+                meta = _meta("WT_H1_RED_DOT_H4_CONVERGENCE_EXIT_LONG")
                 meta["h1_red_close_count"] = position.h1_red_close_count
                 return Signal(
                     action="close_force",
-                    reason="WT_H1_THIRD_RED_DOT_H4_CONVERGENCE_EXIT_LONG",
+                    reason="WT_H1_RED_DOT_H4_CONVERGENCE_EXIT_LONG",
                     meta=meta,
                 )
     if position.side == "short":

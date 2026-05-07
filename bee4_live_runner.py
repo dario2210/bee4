@@ -25,6 +25,7 @@ from bee4_engine import (
     bar_from_row as _bar_from_row,
     build_position_state,
     compute_trade_close,
+    generate_emergency_exit_signal,
     generate_entry_signal,
     generate_exit_signal,
     generate_partial_exit_signal,
@@ -67,6 +68,7 @@ def load_state() -> dict:
             "entry_atr": None,
             "remaining_fraction": 1.0,
             "tp1_taken": False,
+            "tp2_taken": False,
             "h1_red_close_count": 0,
             "h1_green_close_count": 0,
             "trade_id": 0,
@@ -89,6 +91,19 @@ def save_state(state: dict) -> None:
 def log_trade(trade: dict) -> None:
     with open(TRADES_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(trade, default=str) + "\n")
+
+
+def holding_hours(entry_time, exit_time) -> float:
+    try:
+        start = datetime.fromisoformat(str(entry_time).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(exit_time).replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        return max(0.0, (end - start).total_seconds() / 3600.0)
+    except Exception:
+        return float("nan")
 
 
 def check_daily_loss(state: dict, capital: float) -> bool:
@@ -133,6 +148,7 @@ def position_from_state(state: dict) -> Optional[PositionState]:
         entry_atr=float(state["entry_atr"]) if state.get("entry_atr") is not None else float("nan"),
         remaining_fraction=float(state.get("remaining_fraction", 1.0)),
         tp1_taken=bool(state.get("tp1_taken", False)),
+        tp2_taken=bool(state.get("tp2_taken", False)),
         h1_red_close_count=int(state.get("h1_red_close_count", 0)),
         h1_green_close_count=int(state.get("h1_green_close_count", 0)),
         trade_id=int(state.get("trade_id", 0)),
@@ -150,6 +166,7 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["entry_atr"] = None
         state["remaining_fraction"] = 1.0
         state["tp1_taken"] = False
+        state["tp2_taken"] = False
         state["h1_red_close_count"] = 0
         state["h1_green_close_count"] = 0
         state["trade_id"] = 0
@@ -162,6 +179,7 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["entry_atr"] = None if np.isnan(pos.entry_atr) else pos.entry_atr
         state["remaining_fraction"] = pos.remaining_fraction
         state["tp1_taken"] = pos.tp1_taken
+        state["tp2_taken"] = pos.tp2_taken
         state["h1_red_close_count"] = pos.h1_red_close_count
         state["h1_green_close_count"] = pos.h1_green_close_count
         state["trade_id"] = pos.trade_id
@@ -241,8 +259,12 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
         state["capital"] = capital
 
         remaining_after = max(0.0, position.remaining_fraction - close_fraction)
-        trade_event = "TP" if sig.action == "close_partial" else "EXIT"
+        if sig.action == "close_partial":
+            trade_event = "TP2" if "TP2" in sig.reason else "TP1" if "TP1" in sig.reason else "TP"
+        else:
+            trade_event = "EXIT"
         trade_id = int(position.trade_id or 0)
+        hold_hours = holding_hours(position.entry_time, bar_time_str)
         trade_log = {
             "ts": bar_time_str,
             "side": position.side,
@@ -258,6 +280,8 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
             "position_notional": close_notional,
             "close_fraction": close_fraction,
             "remaining_fraction_after": remaining_after,
+            "holding_hours": hold_hours,
+            "time_to_tp1_hours": hold_hours if trade_event == "TP1" else None,
             "logical_trade_no": trade_id,
             "trade_event": trade_event,
             "trade_label": f"{trade_id} {trade_event}".strip(),
@@ -274,15 +298,29 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
             position_to_state(state, None)
         else:
             position.remaining_fraction = remaining_after
-            position.tp1_taken = True
+            if "TP2" in sig.reason:
+                position.tp2_taken = True
+            elif "TP1" in sig.reason:
+                position.tp1_taken = True
             position_to_state(state, position)
         return capital
 
     if position is not None:
-        sig = generate_partial_exit_signal(bar, params, position)
+        sig = generate_emergency_exit_signal(bar, params, position)
         if sig.action != "none":
+            capital = _close_position_signal(position, sig, capital, final_close=True)
+            position = position_from_state(state)
+
+    if position is not None:
+        partial_guard = 0
+        sig = generate_partial_exit_signal(bar, params, position)
+        while sig.action != "none" and position is not None and partial_guard < 3:
             capital = _close_position_signal(position, sig, capital, final_close=False)
             position = position_from_state(state)
+            partial_guard += 1
+            if position is None:
+                break
+            sig = generate_partial_exit_signal(bar, params, position)
 
     if position is not None:
         sig = generate_exit_signal(bar, prev, params, position)

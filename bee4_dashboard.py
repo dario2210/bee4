@@ -248,12 +248,8 @@ def _clean_selected_values(values, fallback, caster):
 
 
 def _direction_flags(direction) -> tuple[str, bool, bool]:
-    choice = str(direction or DEFAULT_PARAMS.get("trade_direction", "both")).strip().lower()
-    if choice == "long":
-        return "long", True, False
-    if choice == "short":
-        return "short", False, True
-    return "both", True, True
+    # BEE4_3 currently tests only the long side. Short signals are ignored by design.
+    return "long", True, False
 
 
 def _strategy_params_from_controls(
@@ -281,6 +277,7 @@ def _strategy_params_from_controls(
             "trade_direction": trade_direction,
             "allow_longs": allow_longs,
             "allow_shorts": allow_shorts,
+            "short_trading_enabled": False,
             "wt_channel_len": int(channel_len if channel_len not in (None, "") else DEFAULT_PARAMS["wt_channel_len"]),
             "wt_avg_len": int(avg_len if avg_len not in (None, "") else DEFAULT_PARAMS["wt_avg_len"]),
             "wt_signal_len": int(signal_len if signal_len not in (None, "") else DEFAULT_PARAMS["wt_signal_len"]),
@@ -309,6 +306,11 @@ def _strategy_params_from_controls(
                 (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_long_tp1_pct", 0.01) * 100.0)
             ) / 100.0,
             "wt_long_tp1_fraction": float(DEFAULT_PARAMS.get("wt_long_tp1_fraction", 1.0 / 3.0)),
+            "wt_long_tp2_enabled": True,
+            "wt_long_tp2_pct": float(DEFAULT_PARAMS.get("wt_long_tp2_pct", 0.02)),
+            "wt_long_tp2_fraction": float(DEFAULT_PARAMS.get("wt_long_tp2_fraction", 1.0 / 3.0)),
+            "wt_long_emergency_sl_enabled": True,
+            "wt_long_emergency_sl_capital_pct": float(DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.01)),
             "wt_short_tp1_enabled": True,
             "wt_short_tp1_pct": float(
                 (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01) * 100.0)
@@ -354,21 +356,13 @@ def _grid_overrides_from_controls(
             WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
             float,
         ),
-        "wt_short_entry_min_below_zero": _clean_selected_values(
-            short_zone_grid,
-            WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID,
-            float,
-        ),
+        "wt_short_entry_min_below_zero": [float(DEFAULT_PARAMS["wt_short_entry_min_below_zero"])],
         "wt_h4_long_filter_max": _clean_selected_values(
             h4_long_filter_grid,
             WT_H4_LONG_FILTER_MAX_GRID,
             float,
         ),
-        "wt_h4_short_filter_min": _clean_selected_values(
-            h4_short_filter_grid,
-            WT_H4_SHORT_FILTER_MIN_GRID,
-            float,
-        ),
+        "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
     }
 
 
@@ -382,11 +376,12 @@ def _grid_combo_count(grid_overrides: dict) -> int:
 PARAM_SUMMARY_ORDER = [
     "trade_direction",
     "wt_long_entry_max_above_zero",
-    "wt_short_entry_min_below_zero",
     "wt_h4_long_filter_max",
-    "wt_h4_short_filter_min",
     "wt_long_tp1_pct",
     "wt_long_tp1_fraction",
+    "wt_long_tp2_pct",
+    "wt_long_tp2_fraction",
+    "wt_long_emergency_sl_capital_pct",
     "fee_rate",
     "slippage_bps",
 ]
@@ -394,11 +389,12 @@ PARAM_SUMMARY_ORDER = [
 PARAM_SUMMARY_LABELS = {
     "trade_direction": "Direction",
     "wt_long_entry_max_above_zero": "Long zone H1",
-    "wt_short_entry_min_below_zero": "Short zone H1",
     "wt_h4_long_filter_max": "Long filter H4",
-    "wt_h4_short_filter_min": "Short filter H4",
     "wt_long_tp1_pct": "Long TP1",
     "wt_long_tp1_fraction": "Long TP1 fraction",
+    "wt_long_tp2_pct": "Long TP2",
+    "wt_long_tp2_fraction": "Long TP2 fraction",
+    "wt_long_emergency_sl_capital_pct": "Emergency SL kapitału",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -530,9 +526,7 @@ def fig_pdist(wd):
     if wd is None or wd.empty: return go.Figure(layout=PT)
     specs = [
         ("best_wt_long_entry_max_above_zero", "Long zone H1", C["green"]),
-        ("best_wt_short_entry_min_below_zero", "Short zone H1", C["red"]),
         ("best_wt_h4_long_filter_max", "Long filter H4", C["purple"]),
-        ("best_wt_h4_short_filter_min", "Short filter H4", C["coral"]),
     ]
     rows = max(1, (len(specs) + 1) // 2)
     fig = make_subplots(
@@ -1051,9 +1045,11 @@ def _trade_detail_panel(trade: dict | None) -> html.Div:
             row2(
                 "Bary w pozycji",
                 fmt_text(trade.get("exit_bars", trade.get("bars_in_position", "n/d"))),
-                "Fee",
-                f"{fmt_float(trade.get('fee_usd'), '.2f', '0.00')} USD",
+                "Czas do TP1 h",
+                fmt_float(trade.get("time_to_tp1_hours"), ".2f", "n/d"),
             ),
+            row2("Czas w pozycji h", fmt_float(trade.get("holding_hours"), ".2f", "n/d"),
+                 "Fee", f"{fmt_float(trade.get('fee_usd'), '.2f', '0.00')} USD"),
             html.Div(style={"borderTop": f"1px solid {C['border']}", "margin": "8px 0"}),
             html.Div("Snapshot wejscia", style={"fontSize": "10px", "color": C["muted"],
                 "fontWeight": "600", "textTransform": "uppercase", "letterSpacing": "0.05em",
@@ -1135,7 +1131,14 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         tdf["logical_trade_no"] = tdf["trade_no"]
     if "trade_event" not in tdf.columns:
         reasons = tdf.get("reason", pd.Series([""] * len(tdf), index=tdf.index)).astype(str)
-        tdf["trade_event"] = np.where(reasons.str.contains("TP1_PARTIAL", case=False, na=False), "TP", "EXIT")
+        tdf["trade_event"] = np.select(
+            [
+                reasons.str.contains("TP2_PARTIAL", case=False, na=False),
+                reasons.str.contains("TP1_PARTIAL", case=False, na=False),
+            ],
+            ["TP2", "TP1"],
+            default="EXIT",
+        )
     if "trade_label" not in tdf.columns:
         logical_ids = pd.to_numeric(tdf["logical_trade_no"], errors="coerce").fillna(tdf["trade_no"])
         tdf["trade_label"] = [
@@ -1151,6 +1154,7 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         "entry_h4_wt1", "entry_h4_wt2", "entry_h4_delta",
         "exit_wt1", "exit_wt2", "exit_delta",
         "exit_signal_level", "exit_h4_wt1", "exit_h4_wt2", "exit_h4_delta",
+        "holding_hours", "time_to_tp1_hours",
         "close_fraction", "remaining_fraction_after", "position_notional", "logical_trade_no",
     ]
     for col in numeric_cols:
@@ -1180,6 +1184,7 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
         c for c in [
             "trade_no", "side", "entry_time", "exit_time", "entry_price",
             "exit_price", "logical_trade_no", "trade_event", "trade_label",
+            "holding_hours", "time_to_tp1_hours",
             "close_fraction", "remaining_fraction_after",
             "gross_ret", "fee_ret", "net_ret", "pnl", "fee_usd", "reason",
         ] if c in tdf.columns
@@ -1189,6 +1194,9 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
         if col in disp.columns:
             disp[col] = (disp[col] * 100).round(3).astype(str) + "%"
     for col in ["pnl", "fee_usd", "entry_price", "exit_price"]:
+        if col in disp.columns:
+            disp[col] = disp[col].round(2)
+    for col in ["holding_hours", "time_to_tp1_hours"]:
         if col in disp.columns:
             disp[col] = disp[col].round(2)
     for col in ["close_fraction", "remaining_fraction_after"]:
@@ -1255,7 +1263,8 @@ def _pine_trade_add_lines(result_data: dict) -> list[str]:
         entry_action, exit_action = ("BUY", "SELL") if side == "long" else ("SELL", "BUY")
         event = str(trade.get("trade_event", "") or "").strip().upper()
         if not event:
-            event = "TP" if "TP1_PARTIAL" in str(trade.get("reason", "")).upper() else "EXIT"
+            reason = str(trade.get("reason", "")).upper()
+            event = "TP2" if "TP2_PARTIAL" in reason else "TP1" if "TP1_PARTIAL" in reason else "EXIT"
         entry_comment = f"T{logical_trade_no} OPEN {direction} {entry_action}"
         exit_comment = f"T{logical_trade_no} {event} {direction} {exit_action}"
 
@@ -1576,7 +1585,7 @@ def _diagnostic_rejection(
     level_now = min(abs(wt1), abs(wt2)) if not np.isnan(wt1) and not np.isnan(wt2) else np.nan
     min_level = float(params.get("wt_min_signal_level", DEFAULT_PARAMS["wt_min_signal_level"]))
     allow_longs = bool(params.get("allow_longs", True))
-    allow_shorts = bool(params.get("allow_shorts", True))
+    allow_shorts = bool(params.get("allow_shorts", True)) and bool(params.get("short_trading_enabled", False))
 
     if side == "long" and not allow_longs:
         return "direction", "long wyłączony w ustawieniach"
@@ -2291,10 +2300,8 @@ def sidebar():
                 {"label": "WFO", "value": "wfo"},
             ], "wfo")),
             field("Kierunek", drp("inp-direction", [
-                {"label": "Oba kierunki", "value": "both"},
-                {"label": "Tylko long", "value": "long"},
-                {"label": "Tylko short", "value": "short"},
-            ], DEFAULT_PARAMS.get("trade_direction", "both"))),
+                {"label": "Tylko long (short OFF)", "value": "long"},
+            ], "long")),
             html.Div([
                 html.Div([field("Fee rate %", inp("inp-fee", round(FEE_RATE*100,4),
                                                    type="number",min=0,max=1,step=0.001))],style={"flex":"1"}),
@@ -2320,13 +2327,13 @@ def sidebar():
             ], style={"display":"none"}),
             html.Div([
                 html.Div([field("Long zone H1", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
-                html.Div([field("Short zone H1", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Short zone H1", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Long filter H4", inp("inp-bt-h4-long", DEFAULT_PARAMS["wt_h4_long_filter_max"], type="number", step=1))], style={"flex":"1"}),
-                html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
-            html.Div([field("TP1 % long/short", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
+            html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
             html.Div([
                 html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
@@ -2342,7 +2349,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_3: Channel/Average/Signal są stałe 10/21/3. TP1 zamyka 1/3 pozycji przy +1%. Long wychodzi po H4 red dot albo po trzeciej czerwonej kropce H1, gdy linie H4 się zbliżają.",
+                "BEE4_3: short jest wyłączony. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Awaryjny SL zamyka resztę, gdy strata aktywnej części pozycji przekroczy 1% kapitału. Reszta wychodzi po pierwszej czerwonej kropce H1, gdy linie H4 się zbliżają.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2428,26 +2435,30 @@ def sidebar():
                 value=WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Short zone min"),
-            dcc.Checklist(id="chk-grid-short-zone",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS],
-                value=WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            html.Div([
+                sec("Short zone min"),
+                dcc.Checklist(id="chk-grid-short-zone",
+                    options=[{"label":f" {v:.1f}","value":v} for v in WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS],
+                    value=[DEFAULT_PARAMS["wt_short_entry_min_below_zero"]], inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ], style={"display":"none"}),
             sec("Long filter H4"),
             dcc.Checklist(id="chk-grid-h4-long",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_FILTER_MAX_OPTIONS],
                 value=WT_H4_LONG_FILTER_MAX_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Short filter H4"),
-            dcc.Checklist(id="chk-grid-h4-short",
-                options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_SHORT_FILTER_MIN_OPTIONS],
-                value=WT_H4_SHORT_FILTER_MIN_GRID, inline=True,
-                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            html.Div([
+                sec("Short filter H4"),
+                dcc.Checklist(id="chk-grid-h4-short",
+                    options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_SHORT_FILTER_MIN_OPTIONS],
+                    value=[DEFAULT_PARAMS["wt_h4_short_filter_min"]], inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ], style={"display":"none"}),
             html.Div(
-                "WFO w BEE4_3 testuje głębokość wejścia H1 oraz osobne progi H4 dla long/short. Channel/Average/Signal są stałe 10/21/3, TP1 jest stałe: 1/3 pozycji przy +1%.",
+                "WFO w BEE4_3 testuje tylko long: głębokość wejścia H1 oraz próg H4 dla longa. Short jest wyłączony i nie mnoży kombinacji. TP1/TP2 są stałe: po 1/3 pozycji przy +1% i +2%, awaryjny SL: strata 1% kapitału.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
