@@ -1,5 +1,5 @@
 ﻿"""
-bee4_dashboard.py  -  Bee4_3 WaveTrend Dashboard  http://IP:8068
+bee4_dashboard.py  -  Bee4_4 WaveTrend Dashboard  http://IP:8070
 """
 from __future__ import annotations
 import argparse, datetime as _dt, io, json, os, threading
@@ -250,7 +250,7 @@ def _clean_selected_values(values, fallback, caster):
 
 
 def _direction_flags(direction) -> tuple[str, bool, bool]:
-    # BEE4_3 currently tests only the long side. Short signals are ignored by design.
+    # BEE4_4 currently tests only the long side. Short signals are ignored by design.
     return "long", True, False
 
 
@@ -286,8 +286,16 @@ def _strategy_params_from_controls(
             "wt_avg_len": int(avg_len if avg_len not in (None, "") else DEFAULT_PARAMS["wt_avg_len"]),
             "wt_signal_len": int(signal_len if signal_len not in (None, "") else DEFAULT_PARAMS["wt_signal_len"]),
             "wt_min_signal_level": 0.0,
-            "wt_long_entry_window_bars": 0,
-            "wt_short_entry_window_bars": 0,
+            "wt_long_entry_window_bars": int(
+                reentry_window
+                if reentry_window not in (None, "")
+                else DEFAULT_PARAMS["wt_long_entry_window_bars"]
+            ),
+            "wt_short_entry_window_bars": int(
+                reentry_window
+                if reentry_window not in (None, "")
+                else DEFAULT_PARAMS["wt_long_entry_window_bars"]
+            ),
             "wt_long_require_ema20_reclaim": False,
             "wt_short_require_ema20_reject": False,
             "wt_long_require_htf_trend": False,
@@ -406,6 +414,7 @@ def _grid_combo_count(grid_overrides: dict) -> int:
 
 PARAM_SUMMARY_ORDER = [
     "trade_direction",
+    "wt_long_entry_window_bars",
     "wt_long_entry_max_above_zero",
     "wt_long_close_min_level",
     "wt_h4_long_filter_max",
@@ -420,6 +429,7 @@ PARAM_SUMMARY_ORDER = [
 
 PARAM_SUMMARY_LABELS = {
     "trade_direction": "Direction",
+    "wt_long_entry_window_bars": "Entry window H1",
     "wt_long_entry_max_above_zero": "Long open level H1",
     "wt_long_close_min_level": "Long close level H1",
     "wt_h4_long_filter_max": "Long open level H4",
@@ -506,17 +516,17 @@ def hero_banner() -> html.Div:
     return html.Div([
         html.Div([
             html.Div("TradingView open source", className="hero-eyebrow"),
-            html.H2("Bee4_3 WaveTrend console"),
+            html.H2("Bee4_4 WaveTrend console"),
             html.P(
-                "Bee4_3 zachowuje dashboard bee1, ale uzywa tylko ostatniej zamknietej swiecy H4 "
-                "oraz rozdziela poziomy open/close dla H1 i H4."
+                "Bee4_4 zachowuje dashboard bee1, ale testuje bardziej elastyczne wejscia H1 "
+                "oraz miekki filtr H4 oparty na ostatniej zamknietej swiecy H4."
             ),
         ], className="hero-copy"),
         html.Div([
             html.Div("Note", className="hero-note-title"),
             html.P(
-                "Long pojawia sie na zielonej kropce H1 przy glebokim WT oraz tylko wtedy, gdy linie WT z H4 sa nisko i zblizaja sie do siebie. "
-                "Short i awaryjny SL sa wylaczone, a wyjscie longa wymaga czerwonej kropki H1, close level H1/H4 i zbiegania H4."
+                "Long moze pojawic sie na zielonej kropce H1 albo kilka swiec po niej, gdy H1 jest w strefie open. "
+                "H4 filtruje kontekst przez poziom open i poprawiajaca sie delte, a wyjscie longa wymaga close level H1/H4 oraz slabniecia H1."
             ),
         ], className="hero-note"),
     ], className="hero-panel")
@@ -1584,21 +1594,21 @@ def _diag_h4_state(row: pd.Series, side: str, params: dict, h4_wt1_col: str, h4_
     if any(np.isnan(v) for v in [h4_wt1, h4_wt2, h4_delta, h4_prev_delta]):
         return False, "brak danych H4"
 
-    current_gap = abs(h4_delta)
-    prev_gap = abs(h4_prev_delta)
-    converging = current_gap < prev_gap
     if side == "long":
         threshold = float(params.get("wt_h4_long_filter_max", DEFAULT_PARAMS["wt_h4_long_filter_max"]))
         in_zone = h4_wt1 <= threshold and h4_wt2 <= threshold
-        correct_direction = h4_delta > h4_prev_delta
+        improving = h4_delta > h4_prev_delta
         if not in_zone:
             return False, f"H4 za wysoko (WT1/WT2 muszą być <= {threshold:g})"
-        if not converging or not correct_direction:
-            return False, "H4 nie zbliża linii dla longa"
+        if not improving:
+            return False, "delta H4 nie poprawia się dla longa"
         return True, "H4 OK"
 
     threshold = float(params.get("wt_h4_short_filter_min", DEFAULT_PARAMS["wt_h4_short_filter_min"]))
     in_zone = h4_wt1 >= threshold and h4_wt2 >= threshold
+    current_gap = abs(h4_delta)
+    prev_gap = abs(h4_prev_delta)
+    converging = current_gap < prev_gap
     correct_direction = h4_delta < h4_prev_delta
     if not in_zone:
         return False, f"H4 za nisko (WT1/WT2 muszą być >= {threshold:g})"
@@ -2374,7 +2384,7 @@ def sidebar():
             ], style={"display":"flex","gap":"8px"}),
             html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
             html.Div([
-                html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
+                html.Div([field("Entry window H1", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
                     {"label": "Off", "value": False},
                     {"label": "On", "value": True},
@@ -2388,7 +2398,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_3: short i awaryjny SL są wyłączone. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Reszta wychodzi po pierwszej czerwonej kropce H1, gdy spełnione są close level H1/H4 i linie H4 się zbliżają.",
+                "BEE4_4: short i awaryjny SL są wyłączone. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Reszta wychodzi, gdy H1/H4 są w close level i H1 zaczyna słabnąć.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2431,16 +2441,18 @@ def sidebar():
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             html.Div([
+                sec("Entry window H1"),
+                dcc.Checklist(id="chk-grid-reentry",
+                    options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
+                    value=WT_REENTRY_WINDOW_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ]),
+            html.Div([
                 sec("Siatka Min level"),
                 dcc.Checklist(id="chk-grid-min-level",
                     options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_OPTIONS],
                     value=WT_MIN_SIGNAL_LEVEL_GRID, inline=True,
-                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
-                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-                sec("Siatka Re-entry"),
-                dcc.Checklist(id="chk-grid-reentry",
-                    options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
-                    value=WT_REENTRY_WINDOW_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Siatka EMA on/off"),
@@ -2509,7 +2521,7 @@ def sidebar():
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             html.Div(
-                "WFO w BEE4_3 testuje tylko long: open level H1/H4 oraz close level H1/H4. Open level oznacza wartość lub niżej, close level wartość lub wyżej. Short i awaryjny SL są wyłączone.",
+                "WFO w BEE4_4 testuje tylko long: entry window H1, open level H1/H4 oraz close level H1/H4. Open level oznacza wartość lub niżej, close level wartość lub wyżej. Short i awaryjny SL są wyłączone.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2614,7 +2626,7 @@ def main_panel():
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = dash.Dash(
     __name__,
-    title="Bee4_3 WaveTrend Dashboard",
+    title="Bee4_4 WaveTrend Dashboard",
     suppress_callback_exceptions=True,
     external_scripts=[
         "https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js",
@@ -4161,11 +4173,11 @@ def render_results(tab, result_data, chart_filter_val, chart_view_val, selected_
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--port", type=int, default=8068)
+    p.add_argument("--port", type=int, default=8070)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--debug", action="store_true")
     a = p.parse_args()
-    print(f"\n{'='*50}\n  Bee4_3 WaveTrend Dashboard  ->  http://{a.host}:{a.port}\n{'='*50}\n")
+    print(f"\n{'='*50}\n  Bee4_4 WaveTrend Dashboard  ->  http://{a.host}:{a.port}\n{'='*50}\n")
     app.run(host=a.host, port=a.port, debug=a.debug)
 
 
