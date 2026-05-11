@@ -1,5 +1,5 @@
 ﻿"""
-bee4_dashboard.py  -  Bee4_4 WaveTrend Dashboard  http://IP:8070
+bee4_dashboard.py  -  Bee4_4 WaveTrend Dashboard  http://IP:8069
 """
 from __future__ import annotations
 import argparse, datetime as _dt, io, json, os, threading
@@ -4173,7 +4173,7 @@ def render_results(tab, result_data, chart_filter_val, chart_view_val, selected_
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--port", type=int, default=8070)
+    p.add_argument("--port", type=int, default=8069)
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--debug", action="store_true")
     a = p.parse_args()
