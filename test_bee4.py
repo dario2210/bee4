@@ -51,6 +51,7 @@ BASE_PARAMS = {
     "short_trading_enabled": False,
     "wt_long_entry_window_bars": 0,
     "wt_long_entry_max_above_zero": -30.0,
+    "wt_long_close_min_level": 0.0,
     "wt_long_exit_min_level": 0.0,
     "wt_long_require_ema20_reclaim": False,
     "wt_long_require_htf_trend": False,
@@ -62,6 +63,7 @@ BASE_PARAMS = {
     "wt_ema_filter_len": 20,
     "wt_h4_filter_interval": "4h",
     "wt_h4_long_filter_max": -20.0,
+    "wt_h4_long_close_min": 0.0,
     "wt_h4_short_filter_min": 50.0,
     "wt_long_tp1_enabled": True,
     "wt_long_tp1_pct": 0.01,
@@ -69,7 +71,7 @@ BASE_PARAMS = {
     "wt_long_tp2_enabled": True,
     "wt_long_tp2_pct": 0.02,
     "wt_long_tp2_fraction": 1.0 / 3.0,
-    "wt_long_emergency_sl_enabled": True,
+    "wt_long_emergency_sl_enabled": False,
     "wt_long_emergency_sl_capital_pct": 0.02,
     "wt_short_tp1_enabled": True,
     "wt_short_tp1_pct": 0.01,
@@ -452,13 +454,24 @@ class TestExitSignals:
 
         assert sig.action == "none"
 
-    def test_long_emergency_stop_closes_remaining_position_at_two_percent_capital_loss(self):
+    def test_long_emergency_stop_is_disabled_by_default(self):
         prev = _make_bar(wt1=-35.0, wt2=-40.0)
         bar = _make_bar(wt1=-34.0, wt2=-39.0)
         bar.low = 1760.0
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
 
         sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "none"
+
+    def test_long_emergency_stop_closes_remaining_position_when_enabled(self):
+        prev = _make_bar(wt1=-35.0, wt2=-40.0)
+        bar = _make_bar(wt1=-34.0, wt2=-39.0)
+        bar.low = 1760.0
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+        params = dict(BASE_PARAMS, wt_long_emergency_sl_enabled=True)
+
+        sig = generate_exit_signal(bar, prev, params, pos)
 
         assert sig.action == "close_force"
         assert sig.reason == "LONG_EMERGENCY_SL_CAPITAL"
@@ -476,8 +489,9 @@ class TestExitSignals:
             tp1_taken=True,
             tp2_taken=True,
         )
+        params = dict(BASE_PARAMS, wt_long_emergency_sl_enabled=True)
 
-        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+        sig = generate_exit_signal(bar, prev, params, pos)
 
         assert sig.action == "close_force"
         assert sig.reason == "LONG_EMERGENCY_SL_CAPITAL"
@@ -610,6 +624,56 @@ class TestExitSignals:
         assert sig.action == "close_force"
         assert sig.reason == "WT_H1_RED_DOT_H4_CONVERGENCE_EXIT_LONG"
         assert sig.meta["h1_red_close_count"] == 1
+
+    def test_h1_red_dot_below_long_close_level_does_not_close_long(self):
+        prev = _make_bar(
+            wt1=-48.0,
+            wt2=-52.0,
+            h4_wt1=58.0,
+            h4_wt2=50.0,
+            h4_prev_wt1=64.0,
+            h4_prev_wt2=50.0,
+        )
+        bar = _make_bar(
+            wt1=-54.0,
+            wt2=-50.0,
+            h4_wt1=56.0,
+            h4_wt2=50.0,
+            h4_prev_wt1=64.0,
+            h4_prev_wt2=50.0,
+        )
+        params = dict(LONG_ONLY_PARAMS, wt_long_close_min_level=0.0, wt_h4_long_close_min=0.0)
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, params, pos)
+
+        assert sig.action == "none"
+        assert pos.h1_red_close_count == 1
+
+    def test_h1_red_dot_below_h4_close_level_does_not_close_long(self):
+        prev = _make_bar(
+            wt1=52.0,
+            wt2=46.0,
+            h4_wt1=-10.0,
+            h4_wt2=-18.0,
+            h4_prev_wt1=-6.0,
+            h4_prev_wt2=-20.0,
+        )
+        bar = _make_bar(
+            wt1=50.0,
+            wt2=56.0,
+            h4_wt1=-12.0,
+            h4_wt2=-18.0,
+            h4_prev_wt1=-6.0,
+            h4_prev_wt2=-20.0,
+        )
+        params = dict(LONG_ONLY_PARAMS, wt_long_close_min_level=0.0, wt_h4_long_close_min=0.0)
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
+
+        sig = generate_exit_signal(bar, prev, params, pos)
+
+        assert sig.action == "none"
+        assert pos.h1_red_close_count == 1
 
     def test_h1_red_dot_counts_but_does_not_close_when_h4_lines_diverge(self):
         prev = _make_bar(
@@ -870,7 +934,13 @@ class TestBacktestAccounting:
         df = _signal_df()
         df.loc[2, "high"] = 1850.0
         df.loc[2, "low"] = 1760.0
-        params = dict(LONG_ONLY_PARAMS, fee_rate=0.0, slippage_bps=0.0, spread_bps=0.0)
+        params = dict(
+            LONG_ONLY_PARAMS,
+            fee_rate=0.0,
+            slippage_bps=0.0,
+            spread_bps=0.0,
+            wt_long_emergency_sl_enabled=True,
+        )
         strat = Bee4Strategy(params, fee_rate=0.0)
 
         trades, _equity, final_cap = strat.run(df, 9_000.0)
@@ -952,8 +1022,10 @@ class TestWFOHelpers:
                 "best_wt_use_htf_filter": [False, False, False],
                 "best_wt_ema_filter_len": [20, 20, 20],
                 "best_wt_long_entry_max_above_zero": [-30.0, -30.0, -40.0],
+                "best_wt_long_close_min_level": [0.0, 10.0, 10.0],
                 "best_wt_short_entry_min_below_zero": [30.0, 30.0, 40.0],
                 "best_wt_h4_long_filter_max": [-20.0, -20.0, -30.0],
+                "best_wt_h4_long_close_min": [0.0, 20.0, 20.0],
                 "best_wt_h4_short_filter_min": [50.0, 50.0, 60.0],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
@@ -971,9 +1043,13 @@ class TestWFOHelpers:
         assert best["wt_avg_len"] == 21
         assert best["wt_signal_len"] == 3
         assert best["wt_long_entry_max_above_zero"] == pytest.approx(-30.0)
+        assert best["wt_long_close_min_level"] == pytest.approx(10.0)
+        assert best["wt_long_exit_min_level"] == pytest.approx(10.0)
         assert best["wt_short_entry_min_below_zero"] == pytest.approx(30.0)
         assert best["wt_h4_long_filter_max"] == pytest.approx(-20.0)
+        assert best["wt_h4_long_close_min"] == pytest.approx(20.0)
         assert best["wt_h4_short_filter_min"] == pytest.approx(50.0)
+        assert best["wt_long_emergency_sl_enabled"] is False
 
     def test_wfo_accepts_bee4_2_grid_overrides(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
@@ -1001,8 +1077,10 @@ class TestWFOHelpers:
             "wt_use_htf_filter": [False],
             "wt_ema_filter_len": [20],
             "wt_long_entry_max_above_zero": [-30.0],
+            "wt_long_close_min_level": [0.0],
             "wt_short_entry_min_below_zero": [30.0],
             "wt_h4_long_filter_max": [-20.0],
+            "wt_h4_long_close_min": [0.0],
             "wt_h4_short_filter_min": [50.0],
         }
 
@@ -1024,8 +1102,10 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_avg_len"]) == {21}
         assert set(windows_df["best_wt_signal_len"]) == {3}
         assert set(windows_df["best_wt_long_entry_max_above_zero"]) == {-30.0}
+        assert set(windows_df["best_wt_long_close_min_level"]) == {0.0}
         assert set(windows_df["best_wt_short_entry_min_below_zero"]) == {30.0}
         assert set(windows_df["best_wt_h4_long_filter_max"]) == {-20.0}
+        assert set(windows_df["best_wt_h4_long_close_min"]) == {0.0}
         assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
 
     def test_wfo_can_stop_during_first_window(self):

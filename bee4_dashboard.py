@@ -23,10 +23,11 @@ from bee4_params import (
     WT_USE_HTF_TREND_FILTER_GRID,
     WT_EMA_FILTER_LEN_OPTIONS,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS,
+    WT_LONG_CLOSE_MIN_LEVEL_GRID, WT_LONG_CLOSE_MIN_LEVEL_OPTIONS,
     WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID, WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS,
     WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
+    WT_H4_LONG_CLOSE_MIN_GRID, WT_H4_LONG_CLOSE_MIN_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
-    WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -267,8 +268,9 @@ def _strategy_params_from_controls(
     short_zone,
     h4_long_filter,
     h4_short_filter,
+    long_close_level,
+    h4_long_close_level,
     long_tp1_pct,
-    long_emergency_sl_capital_pct,
     fee_rate: float,
     slippage_bps: float,
 ) -> dict:
@@ -294,11 +296,26 @@ def _strategy_params_from_controls(
             "wt_long_entry_max_above_zero": float(
                 long_zone if long_zone not in (None, "") else DEFAULT_PARAMS["wt_long_entry_max_above_zero"]
             ),
+            "wt_long_close_min_level": float(
+                long_close_level
+                if long_close_level not in (None, "")
+                else DEFAULT_PARAMS["wt_long_close_min_level"]
+            ),
+            "wt_long_exit_min_level": float(
+                long_close_level
+                if long_close_level not in (None, "")
+                else DEFAULT_PARAMS["wt_long_close_min_level"]
+            ),
             "wt_short_entry_min_below_zero": float(
                 short_zone if short_zone not in (None, "") else DEFAULT_PARAMS["wt_short_entry_min_below_zero"]
             ),
             "wt_h4_long_filter_max": float(
                 h4_long_filter if h4_long_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_long_filter_max"]
+            ),
+            "wt_h4_long_close_min": float(
+                h4_long_close_level
+                if h4_long_close_level not in (None, "")
+                else DEFAULT_PARAMS["wt_h4_long_close_min"]
             ),
             "wt_h4_short_filter_min": float(
                 h4_short_filter if h4_short_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_short_filter_min"]
@@ -311,15 +328,8 @@ def _strategy_params_from_controls(
             "wt_long_tp2_enabled": True,
             "wt_long_tp2_pct": float(DEFAULT_PARAMS.get("wt_long_tp2_pct", 0.02)),
             "wt_long_tp2_fraction": float(DEFAULT_PARAMS.get("wt_long_tp2_fraction", 1.0 / 3.0)),
-            "wt_long_emergency_sl_enabled": True,
-            "wt_long_emergency_sl_capital_pct": float(
-                (
-                    long_emergency_sl_capital_pct
-                    if long_emergency_sl_capital_pct not in (None, "")
-                    else DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.02) * 100.0
-                )
-            )
-            / 100.0,
+            "wt_long_emergency_sl_enabled": False,
+            "wt_long_emergency_sl_capital_pct": float(DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.02)),
             "wt_short_tp1_enabled": True,
             "wt_short_tp1_pct": float(
                 (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01) * 100.0)
@@ -350,7 +360,8 @@ def _grid_overrides_from_controls(
     short_zone_grid,
     h4_long_filter_grid,
     h4_short_filter_grid,
-    long_emergency_sl_capital_pct_grid,
+    long_close_level_grid,
+    h4_long_close_level_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -366,18 +377,23 @@ def _grid_overrides_from_controls(
             WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
             float,
         ),
+        "wt_long_close_min_level": _clean_selected_values(
+            long_close_level_grid,
+            WT_LONG_CLOSE_MIN_LEVEL_GRID,
+            float,
+        ),
         "wt_short_entry_min_below_zero": [float(DEFAULT_PARAMS["wt_short_entry_min_below_zero"])],
         "wt_h4_long_filter_max": _clean_selected_values(
             h4_long_filter_grid,
             WT_H4_LONG_FILTER_MAX_GRID,
             float,
         ),
-        "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
-        "wt_long_emergency_sl_capital_pct": _clean_selected_values(
-            long_emergency_sl_capital_pct_grid,
-            WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
+        "wt_h4_long_close_min": _clean_selected_values(
+            h4_long_close_level_grid,
+            WT_H4_LONG_CLOSE_MIN_GRID,
             float,
         ),
+        "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
     }
 
 
@@ -391,25 +407,27 @@ def _grid_combo_count(grid_overrides: dict) -> int:
 PARAM_SUMMARY_ORDER = [
     "trade_direction",
     "wt_long_entry_max_above_zero",
+    "wt_long_close_min_level",
     "wt_h4_long_filter_max",
+    "wt_h4_long_close_min",
     "wt_long_tp1_pct",
     "wt_long_tp1_fraction",
     "wt_long_tp2_pct",
     "wt_long_tp2_fraction",
-    "wt_long_emergency_sl_capital_pct",
     "fee_rate",
     "slippage_bps",
 ]
 
 PARAM_SUMMARY_LABELS = {
     "trade_direction": "Direction",
-    "wt_long_entry_max_above_zero": "Long zone H1",
-    "wt_h4_long_filter_max": "Long filter H4",
+    "wt_long_entry_max_above_zero": "Long open level H1",
+    "wt_long_close_min_level": "Long close level H1",
+    "wt_h4_long_filter_max": "Long open level H4",
+    "wt_h4_long_close_min": "Long close level H4",
     "wt_long_tp1_pct": "Long TP1",
     "wt_long_tp1_fraction": "Long TP1 fraction",
     "wt_long_tp2_pct": "Long TP2",
     "wt_long_tp2_fraction": "Long TP2 fraction",
-    "wt_long_emergency_sl_capital_pct": "Emergency SL kapitału",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -491,14 +509,14 @@ def hero_banner() -> html.Div:
             html.H2("Bee4_3 WaveTrend console"),
             html.P(
                 "Bee4_3 zachowuje dashboard bee1, ale uzywa tylko ostatniej zamknietej swiecy H4 "
-                "oraz chroni longa przed awaryjnym wyjsciem H4, gdy H1 nadal jest ponizej zera."
+                "oraz rozdziela poziomy open/close dla H1 i H4."
             ),
         ], className="hero-copy"),
         html.Div([
             html.Div("Note", className="hero-note-title"),
             html.P(
                 "Long pojawia sie na zielonej kropce H1 przy glebokim WT oraz tylko wtedy, gdy linie WT z H4 sa nisko i zblizaja sie do siebie. "
-                "Short dziala lustrzanie, a wyjscie nastepuje dopiero na przeciwnym setupie."
+                "Short i awaryjny SL sa wylaczone, a wyjscie longa wymaga czerwonej kropki H1, close level H1/H4 i zbiegania H4."
             ),
         ], className="hero-note"),
     ], className="hero-panel")
@@ -542,9 +560,10 @@ def fig_wfo(wd):
 def fig_pdist(wd):
     if wd is None or wd.empty: return go.Figure(layout=PT)
     specs = [
-        ("best_wt_long_entry_max_above_zero", "Long zone H1", C["green"]),
-        ("best_wt_h4_long_filter_max", "Long filter H4", C["purple"]),
-        ("best_wt_long_emergency_sl_capital_pct", "Emergency SL kapitału", C["red"]),
+        ("best_wt_long_entry_max_above_zero", "Long open level H1", C["green"]),
+        ("best_wt_long_close_min_level", "Long close level H1", C["amber"]),
+        ("best_wt_h4_long_filter_max", "Long open level H4", C["purple"]),
+        ("best_wt_h4_long_close_min", "Long close level H4", C["blue"]),
     ]
     rows = max(1, (len(specs) + 1) // 2)
     fig = make_subplots(
@@ -2344,21 +2363,16 @@ def sidebar():
                 ),
             ], style={"display":"none"}),
             html.Div([
-                html.Div([field("Long zone H1", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long open level H1", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long close level H1", inp("inp-bt-long-close-level", DEFAULT_PARAMS["wt_long_close_min_level"], type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short zone H1", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
-                html.Div([field("Long filter H4", inp("inp-bt-h4-long", DEFAULT_PARAMS["wt_h4_long_filter_max"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long open level H4", inp("inp-bt-h4-long", DEFAULT_PARAMS["wt_h4_long_filter_max"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long close level H4", inp("inp-bt-h4-long-close", DEFAULT_PARAMS["wt_h4_long_close_min"], type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
-            html.Div([field("Awaryjny SL kapitału %", inp(
-                "inp-bt-long-emergency-sl-capital-pct",
-                round(DEFAULT_PARAMS["wt_long_emergency_sl_capital_pct"] * 100.0, 2),
-                type="number",
-                min=0,
-                step=0.1,
-            ))]),
             html.Div([
                 html.Div([field("Re-entry", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"display":"none"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
@@ -2374,7 +2388,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_3: short jest wyłączony. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Awaryjny SL zamyka resztę, gdy strata aktywnej części pozycji przekroczy ustawiony procent kapitału. Reszta wychodzi po pierwszej czerwonej kropce H1, gdy linie H4 się zbliżają.",
+                "BEE4_3: short i awaryjny SL są wyłączone. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Reszta wychodzi po pierwszej czerwonej kropce H1, gdy spełnione są close level H1/H4 i linie H4 się zbliżają.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2454,10 +2468,16 @@ def sidebar():
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
-            sec("Long zone max"),
+            sec("Long open level H1"),
             dcc.Checklist(id="chk-grid-long-zone",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS],
                 value=WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, inline=True,
+                inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            sec("Long close level H1"),
+            dcc.Checklist(id="chk-grid-long-close-level",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_CLOSE_MIN_LEVEL_OPTIONS],
+                value=WT_LONG_CLOSE_MIN_LEVEL_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div([
@@ -2468,19 +2488,16 @@ def sidebar():
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
-            sec("Long filter H4"),
+            sec("Long open level H4"),
             dcc.Checklist(id="chk-grid-h4-long",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_FILTER_MAX_OPTIONS],
                 value=WT_H4_LONG_FILTER_MAX_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
-            sec("Awaryjny SL kapitału"),
-            dcc.Checklist(id="chk-grid-long-emergency-sl-capital-pct",
-                options=[
-                    {"label": f" {v * 100.0:.1f}%", "value": v}
-                    for v in WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS
-                ],
-                value=WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, inline=True,
+            sec("Long close level H4"),
+            dcc.Checklist(id="chk-grid-h4-long-close",
+                options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_CLOSE_MIN_OPTIONS],
+                value=WT_H4_LONG_CLOSE_MIN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div([
@@ -2492,7 +2509,7 @@ def sidebar():
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             html.Div(
-                "WFO w BEE4_3 testuje tylko long: głębokość wejścia H1, próg H4 dla longa oraz awaryjny SL kapitału. Short jest wyłączony i nie mnoży kombinacji. TP1/TP2 są stałe: po 1/3 pozycji przy +1% i +2%.",
+                "WFO w BEE4_3 testuje tylko long: open level H1/H4 oraz close level H1/H4. Open level oznacza wartość lub niżej, close level wartość lub wyżej. Short i awaryjny SL są wyłączone.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2772,8 +2789,9 @@ def _worker(
     bt_short_zone,
     bt_h4_long,
     bt_h4_short,
+    bt_long_close_level,
+    bt_h4_long_close,
     bt_long_tp1_pct,
-    bt_long_emergency_sl_capital_pct,
     grid_channel,
     grid_avg,
     grid_signal,
@@ -2786,7 +2804,8 @@ def _worker(
     grid_short_zone,
     grid_h4_long,
     grid_h4_short,
-    grid_long_emergency_sl_capital_pct,
+    grid_long_close_level,
+    grid_h4_long_close,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -2852,8 +2871,9 @@ def _worker(
             bt_short_zone,
             bt_h4_long,
             bt_h4_short,
+            bt_long_close_level,
+            bt_h4_long_close,
             bt_long_tp1_pct,
-            bt_long_emergency_sl_capital_pct,
             fee_rate_val,
             slip_bps_val,
         )
@@ -2910,7 +2930,8 @@ def _worker(
             grid_short_zone,
             grid_h4_long,
             grid_h4_short,
-            grid_long_emergency_sl_capital_pct,
+            grid_long_close_level,
+            grid_h4_long_close,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3248,8 +3269,9 @@ def load_saved_result(n_clicks, filename):
     State("inp-bt-ema-len","value"),
     State("inp-bt-long-zone","value"), State("inp-bt-short-zone","value"),
     State("inp-bt-h4-long","value"), State("inp-bt-h4-short","value"),
+    State("inp-bt-long-close-level","value"),
+    State("inp-bt-h4-long-close","value"),
     State("inp-bt-long-tp1-pct","value"),
-    State("inp-bt-long-emergency-sl-capital-pct","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
@@ -3257,7 +3279,8 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-ema-len","value"),
     State("chk-grid-long-zone","value"), State("chk-grid-short-zone","value"),
     State("chk-grid-h4-long","value"), State("chk-grid-h4-short","value"),
-    State("chk-grid-long-emergency-sl-capital-pct","value"),
+    State("chk-grid-long-close-level","value"),
+    State("chk-grid-h4-long-close","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3265,10 +3288,10 @@ def on_run_stop(nr, ns,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-    bt_long_tp1_pct, bt_long_emergency_sl_capital_pct,
+    bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-    grid_h4_long, grid_h4_short, grid_long_emergency_sl_capital_pct):
+    grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3292,10 +3315,10 @@ def on_run_stop(nr, ns,
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-            bt_long_tp1_pct, bt_long_emergency_sl_capital_pct,
+            bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-            grid_h4_long, grid_h4_short, grid_long_emergency_sl_capital_pct,
+            grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

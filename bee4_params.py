@@ -35,7 +35,8 @@ ALLOW_SHORTS = False
 SHORT_TRADING_ENABLED = False
 WT_LONG_ENTRY_WINDOW_BARS = 0
 WT_LONG_ENTRY_MAX_ABOVE_ZERO = -30.0
-WT_LONG_EXIT_MIN_LEVEL = 0.0
+WT_LONG_CLOSE_MIN_LEVEL = 0.0
+WT_LONG_EXIT_MIN_LEVEL = WT_LONG_CLOSE_MIN_LEVEL
 WT_LONG_REQUIRE_EMA20_RECLAIM = False
 WT_LONG_REQUIRE_HTF_TREND = False
 WT_SHORT_ENTRY_WINDOW_BARS = 0
@@ -48,6 +49,7 @@ HTF_EMA_LEN = 200
 HTF_EMA_INTERVAL = "4h"
 WT_H4_FILTER_INTERVAL = "4h"
 WT_H4_LONG_FILTER_MAX = -20.0
+WT_H4_LONG_CLOSE_MIN = 0.0
 WT_H4_SHORT_FILTER_MIN = 50.0
 WT_LONG_TP1_ENABLED = True
 WT_LONG_TP1_PCT = 0.01
@@ -55,7 +57,7 @@ WT_LONG_TP1_FRACTION = 1.0 / 3.0
 WT_LONG_TP2_ENABLED = True
 WT_LONG_TP2_PCT = 0.02
 WT_LONG_TP2_FRACTION = 1.0 / 3.0
-WT_LONG_EMERGENCY_SL_ENABLED = True
+WT_LONG_EMERGENCY_SL_ENABLED = False
 WT_LONG_EMERGENCY_SL_CAPITAL_PCT = 0.02
 WT_SHORT_TP1_ENABLED = True
 WT_SHORT_TP1_PCT = 0.01
@@ -89,14 +91,16 @@ WT_EMA_FILTER_LEN_GRID = [20]
 WT_EMA_FILTER_LEN_OPTIONS = [8, 10, 15, 20]
 WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID = [-30.0, -40.0, -50.0, -60.0]
 WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS = [-30.0, -40.0, -50.0, -60.0]
+WT_LONG_CLOSE_MIN_LEVEL_GRID = [0.0]
+WT_LONG_CLOSE_MIN_LEVEL_OPTIONS = [0.0, 10.0, 20.0, 30.0, 40.0]
 WT_SHORT_ENTRY_MIN_BELOW_ZERO_GRID = [30.0, 40.0, 50.0, 60.0]
 WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS = [30.0, 40.0, 50.0, 60.0]
 WT_H4_LONG_FILTER_MAX_GRID = [-20.0, -30.0, -40.0, -50.0]
 WT_H4_LONG_FILTER_MAX_OPTIONS = [-20.0, -30.0, -40.0, -50.0]
+WT_H4_LONG_CLOSE_MIN_GRID = [0.0]
+WT_H4_LONG_CLOSE_MIN_OPTIONS = [0.0, 10.0, 20.0, 30.0, 40.0]
 WT_H4_SHORT_FILTER_MIN_GRID = [30.0, 40.0, 50.0, 60.0]
 WT_H4_SHORT_FILTER_MIN_OPTIONS = [30.0, 40.0, 50.0, 60.0]
-WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID = [0.02]
-WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS = [0.01, 0.02, 0.03, 0.04]
 
 # Compatibility aliases kept so the bee1 dashboard structure can stay intact
 TP_GRID = WT_CHANNEL_LEN_GRID
@@ -123,6 +127,7 @@ DEFAULT_PARAMS = {
     "short_trading_enabled": SHORT_TRADING_ENABLED,
     "wt_long_entry_window_bars": WT_LONG_ENTRY_WINDOW_BARS,
     "wt_long_entry_max_above_zero": WT_LONG_ENTRY_MAX_ABOVE_ZERO,
+    "wt_long_close_min_level": WT_LONG_CLOSE_MIN_LEVEL,
     "wt_long_exit_min_level": WT_LONG_EXIT_MIN_LEVEL,
     "wt_long_require_ema20_reclaim": WT_LONG_REQUIRE_EMA20_RECLAIM,
     "wt_long_require_htf_trend": WT_LONG_REQUIRE_HTF_TREND,
@@ -134,6 +139,7 @@ DEFAULT_PARAMS = {
     "wt_ema_filter_len": WT_EMA_FILTER_LEN,
     "wt_h4_filter_interval": WT_H4_FILTER_INTERVAL,
     "wt_h4_long_filter_max": WT_H4_LONG_FILTER_MAX,
+    "wt_h4_long_close_min": WT_H4_LONG_CLOSE_MIN,
     "wt_h4_short_filter_min": WT_H4_SHORT_FILTER_MIN,
     "wt_long_tp1_enabled": WT_LONG_TP1_ENABLED,
     "wt_long_tp1_pct": WT_LONG_TP1_PCT,
@@ -194,6 +200,8 @@ def load_params() -> dict:
     params["allow_longs"] = True
     params["allow_shorts"] = False
     params["short_trading_enabled"] = False
+    params["wt_long_emergency_sl_enabled"] = False
+    params["atr_stop_enabled"] = False
 
     return params
 

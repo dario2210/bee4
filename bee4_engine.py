@@ -269,6 +269,23 @@ def _h4_filter_ok(bar: BarData, side: Side, params: dict) -> bool:
     )
 
 
+def _long_close_level_ok(bar: BarData, params: dict) -> bool:
+    h1_min = float(
+        params.get("wt_long_close_min_level", params.get("wt_long_exit_min_level", 0.0))
+    )
+    h4_min = float(params.get("wt_h4_long_close_min", 0.0))
+    return (
+        not np.isnan(bar.wt1)
+        and not np.isnan(bar.wt2)
+        and not np.isnan(bar.h4_wt1)
+        and not np.isnan(bar.h4_wt2)
+        and bar.wt1 >= h1_min
+        and bar.wt2 >= h1_min
+        and bar.h4_wt1 >= h4_min
+        and bar.h4_wt2 >= h4_min
+    )
+
+
 def generate_entry_signal(
     bar: BarData,
     prev_bar: BarData,
@@ -484,8 +501,8 @@ def generate_exit_signal(
 ) -> Signal:
     """
     Exit logic for BEE4_3:
-      - emergency long stop closes the remaining position at -1% from entry
-      - first H1 red dot closes the remaining long when H4 WT lines converge
+      - emergency long stop is disabled by default
+      - first H1 red dot closes the remaining long when H1/H4 close levels are met and H4 WT lines converge
       - H4 green dot / three H1 green dots close the remaining short symmetrically
       - opposite entry signals do not close/reverse an active position
     """
@@ -519,9 +536,17 @@ def generate_exit_signal(
             return emergency_sig
         if _cross_down(bar, prev_bar):
             position.h1_red_close_count += 1
-            if position.h1_red_close_count >= 1 and _h4_gap_converging(bar):
+            if (
+                position.h1_red_close_count >= 1
+                and _long_close_level_ok(bar, params)
+                and _h4_gap_converging(bar)
+            ):
                 meta = _meta("WT_H1_RED_DOT_H4_CONVERGENCE_EXIT_LONG")
                 meta["h1_red_close_count"] = position.h1_red_close_count
+                meta["long_close_level_h1"] = float(
+                    params.get("wt_long_close_min_level", params.get("wt_long_exit_min_level", 0.0))
+                )
+                meta["long_close_level_h4"] = float(params.get("wt_h4_long_close_min", 0.0))
                 return Signal(
                     action="close_force",
                     reason="WT_H1_RED_DOT_H4_CONVERGENCE_EXIT_LONG",
