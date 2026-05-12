@@ -28,6 +28,7 @@ from bee4_params import (
     WT_H4_LONG_FILTER_MAX_GRID, WT_H4_LONG_FILTER_MAX_OPTIONS,
     WT_H4_LONG_CLOSE_MIN_GRID, WT_H4_LONG_CLOSE_MIN_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
+    WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -254,6 +255,13 @@ def _direction_flags(direction) -> tuple[str, bool, bool]:
     return "long", True, False
 
 
+def _pct_value(value, fallback: float = 0.0) -> float:
+    if value in (None, ""):
+        return float(fallback)
+    pct = float(value)
+    return pct / 100.0 if pct > 1.0 else pct
+
+
 def _strategy_params_from_controls(
     direction,
     channel_len,
@@ -271,11 +279,16 @@ def _strategy_params_from_controls(
     long_close_level,
     h4_long_close_level,
     long_tp1_pct,
+    long_sl_pct,
     fee_rate: float,
     slippage_bps: float,
 ) -> dict:
     params = dict(DEFAULT_PARAMS)
     trade_direction, allow_longs, allow_shorts = _direction_flags(direction)
+    emergency_sl_pct = _pct_value(
+        long_sl_pct,
+        float(DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.0)),
+    )
     params.update(
         {
             "trade_direction": trade_direction,
@@ -336,8 +349,8 @@ def _strategy_params_from_controls(
             "wt_long_tp2_enabled": True,
             "wt_long_tp2_pct": float(DEFAULT_PARAMS.get("wt_long_tp2_pct", 0.02)),
             "wt_long_tp2_fraction": float(DEFAULT_PARAMS.get("wt_long_tp2_fraction", 1.0 / 3.0)),
-            "wt_long_emergency_sl_enabled": False,
-            "wt_long_emergency_sl_capital_pct": float(DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.02)),
+            "wt_long_emergency_sl_enabled": emergency_sl_pct > 0.0,
+            "wt_long_emergency_sl_capital_pct": emergency_sl_pct,
             "wt_short_tp1_enabled": True,
             "wt_short_tp1_pct": float(
                 (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01) * 100.0)
@@ -370,6 +383,7 @@ def _grid_overrides_from_controls(
     h4_short_filter_grid,
     long_close_level_grid,
     h4_long_close_level_grid,
+    long_sl_pct_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -401,6 +415,11 @@ def _grid_overrides_from_controls(
             WT_H4_LONG_CLOSE_MIN_GRID,
             float,
         ),
+        "wt_long_emergency_sl_capital_pct": _clean_selected_values(
+            long_sl_pct_grid,
+            WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
+            float,
+        ),
         "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
     }
 
@@ -419,6 +438,7 @@ PARAM_SUMMARY_ORDER = [
     "wt_long_close_min_level",
     "wt_h4_long_filter_max",
     "wt_h4_long_close_min",
+    "wt_long_emergency_sl_capital_pct",
     "wt_long_tp1_pct",
     "wt_long_tp1_fraction",
     "wt_long_tp2_pct",
@@ -434,6 +454,7 @@ PARAM_SUMMARY_LABELS = {
     "wt_long_close_min_level": "Long close level H1",
     "wt_h4_long_filter_max": "Long open level H4",
     "wt_h4_long_close_min": "Long close level H4",
+    "wt_long_emergency_sl_capital_pct": "Stop loss",
     "wt_long_tp1_pct": "Long TP1",
     "wt_long_tp1_fraction": "Long TP1 fraction",
     "wt_long_tp2_pct": "Long TP2",
@@ -2382,7 +2403,18 @@ def sidebar():
                 html.Div([field("Long close level H4", inp("inp-bt-h4-long-close", DEFAULT_PARAMS["wt_h4_long_close_min"], type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
-            html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))]),
+            html.Div([
+                html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
+                html.Div([field("Stop loss", drp(
+                    "inp-bt-long-sl-pct",
+                    [{"label": "Wyłączony", "value": 0.0}] + [
+                        {"label": f"{v * 100:.0f}%", "value": v}
+                        for v in WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS
+                        if v > 0.0
+                    ],
+                    DEFAULT_PARAMS["wt_long_emergency_sl_capital_pct"],
+                ))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Entry window H1", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
                 html.Div([field("EMA filter", drp("inp-bt-ema-filter", [
@@ -2398,7 +2430,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_4: short i awaryjny SL są wyłączone. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Reszta wychodzi, gdy H1/H4 są w close level i H1 zaczyna słabnąć.",
+                "BEE4_4: short jest wyłączony. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Stop loss może być wyłączony albo ustawiony na 1/2/5/10%.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2445,6 +2477,20 @@ def sidebar():
                 dcc.Checklist(id="chk-grid-reentry",
                     options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
                     value=WT_REENTRY_WINDOW_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ]),
+            html.Div([
+                sec("Stop loss"),
+                dcc.Checklist(id="chk-grid-long-sl-pct",
+                    options=[
+                        {
+                            "label": " Wyłączony" if v == 0.0 else f" {v * 100:.0f}%",
+                            "value": v,
+                        }
+                        for v in WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS
+                    ],
+                    value=WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ]),
@@ -2521,7 +2567,7 @@ def sidebar():
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             html.Div(
-                "WFO w BEE4_4 testuje tylko long: entry window H1, open level H1/H4 oraz close level H1/H4. Open level oznacza wartość lub niżej, close level wartość lub wyżej. Short i awaryjny SL są wyłączone.",
+                "WFO w BEE4_4 testuje tylko long: entry window H1, open level H1/H4, close level H1/H4 oraz stop loss. Open level oznacza wartość lub niżej, close level wartość lub wyżej.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -2804,6 +2850,7 @@ def _worker(
     bt_long_close_level,
     bt_h4_long_close,
     bt_long_tp1_pct,
+    bt_long_sl_pct,
     grid_channel,
     grid_avg,
     grid_signal,
@@ -2818,6 +2865,7 @@ def _worker(
     grid_h4_short,
     grid_long_close_level,
     grid_h4_long_close,
+    grid_long_sl_pct,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -2886,6 +2934,7 @@ def _worker(
             bt_long_close_level,
             bt_h4_long_close,
             bt_long_tp1_pct,
+            bt_long_sl_pct,
             fee_rate_val,
             slip_bps_val,
         )
@@ -2944,6 +2993,7 @@ def _worker(
             grid_h4_short,
             grid_long_close_level,
             grid_h4_long_close,
+            grid_long_sl_pct,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3284,6 +3334,7 @@ def load_saved_result(n_clicks, filename):
     State("inp-bt-long-close-level","value"),
     State("inp-bt-h4-long-close","value"),
     State("inp-bt-long-tp1-pct","value"),
+    State("inp-bt-long-sl-pct","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
     State("chk-grid-reentry","value"), State("chk-grid-ema-filter","value"),
@@ -3293,6 +3344,7 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-h4-long","value"), State("chk-grid-h4-short","value"),
     State("chk-grid-long-close-level","value"),
     State("chk-grid-h4-long-close","value"),
+    State("chk-grid-long-sl-pct","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3300,10 +3352,10 @@ def on_run_stop(nr, ns,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-    bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct,
+    bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct, bt_long_sl_pct,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-    grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close):
+    grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3327,10 +3379,10 @@ def on_run_stop(nr, ns,
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-            bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct,
+            bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct, bt_long_sl_pct,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-            grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close,
+            grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

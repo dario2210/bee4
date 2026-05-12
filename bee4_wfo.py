@@ -32,6 +32,8 @@ from bee4_params import (
     WT_LONG_ENTRY_MAX_ABOVE_ZERO,
     WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID,
     WT_LONG_ENTRY_WINDOW_BARS,
+    WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
+    WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
     WT_LONG_REQUIRE_EMA20_RECLAIM,
     WT_MIN_SIGNAL_LEVEL,
     WT_MIN_SIGNAL_LEVEL_GRID,
@@ -171,6 +173,11 @@ def walk_forward_optimization(
         WT_H4_LONG_CLOSE_MIN_GRID,
         float,
     )
+    long_emergency_sl_grid = _clean_grid(
+        grid_overrides.get("wt_long_emergency_sl_capital_pct"),
+        WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
+        float,
+    )
     h4_short_filter_grid = (
         _clean_grid(
             grid_overrides.get("wt_h4_short_filter_min"),
@@ -206,6 +213,7 @@ def walk_forward_optimization(
         * len(short_zone_grid)
         * len(h4_long_filter_grid)
         * len(h4_long_close_min_grid)
+        * len(long_emergency_sl_grid)
         * len(h4_short_filter_grid)
     )
     combo_progress_step = max(1, combo_total // 20)
@@ -239,6 +247,7 @@ def walk_forward_optimization(
             "wt_long_close_min_level",
             "wt_h4_long_filter_max",
             "wt_h4_long_close_min",
+            "wt_long_emergency_sl_capital_pct",
         ]
         if shorts_enabled:
             selection_keys.extend(["wt_short_entry_min_below_zero", "wt_h4_short_filter_min"])
@@ -267,6 +276,7 @@ def walk_forward_optimization(
             wt_h4_long_filter_max,
             wt_h4_short_filter_min,
             wt_h4_long_close_min,
+            wt_long_emergency_sl_capital_pct,
         ) in product(
             channel_grid,
             avg_grid,
@@ -282,6 +292,7 @@ def walk_forward_optimization(
             h4_long_filter_grid,
             h4_short_filter_grid,
             h4_long_close_min_grid,
+            long_emergency_sl_grid,
         ):
             if should_stop is not None and should_stop():
                 stopped = True
@@ -316,7 +327,8 @@ def walk_forward_optimization(
                     "wt_h4_long_filter_max": wt_h4_long_filter_max,
                     "wt_h4_short_filter_min": wt_h4_short_filter_min,
                     "wt_h4_long_close_min": wt_h4_long_close_min,
-                    "wt_long_emergency_sl_enabled": False,
+                    "wt_long_emergency_sl_enabled": wt_long_emergency_sl_capital_pct > 0.0,
+                    "wt_long_emergency_sl_capital_pct": wt_long_emergency_sl_capital_pct,
                 }
             )
             if not shorts_enabled:
@@ -403,6 +415,13 @@ def walk_forward_optimization(
             trades_live["wt_h4_long_filter_max"] = best_params.get("wt_h4_long_filter_max", WT_H4_LONG_FILTER_MAX)
             trades_live["wt_h4_long_close_min"] = best_params.get("wt_h4_long_close_min", WT_H4_LONG_CLOSE_MIN)
             trades_live["wt_h4_short_filter_min"] = best_params.get("wt_h4_short_filter_min", WT_H4_SHORT_FILTER_MIN)
+            trades_live["wt_long_emergency_sl_capital_pct"] = best_params.get(
+                "wt_long_emergency_sl_capital_pct",
+                WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
+            )
+            trades_live["wt_long_emergency_sl_enabled"] = bool(
+                best_params.get("wt_long_emergency_sl_enabled", False)
+            )
             trades_live["trade_direction"] = best_params.get("trade_direction", "long")
             trades_live["allow_longs"] = bool(best_params.get("allow_longs", True))
             trades_live["allow_shorts"] = bool(best_params.get("allow_shorts", False))
@@ -441,6 +460,13 @@ def walk_forward_optimization(
                 "best_wt_h4_long_filter_max": best_params.get("wt_h4_long_filter_max", WT_H4_LONG_FILTER_MAX),
                 "best_wt_h4_long_close_min": best_params.get("wt_h4_long_close_min", WT_H4_LONG_CLOSE_MIN),
                 "best_wt_h4_short_filter_min": best_params.get("wt_h4_short_filter_min", WT_H4_SHORT_FILTER_MIN),
+                "best_wt_long_emergency_sl_capital_pct": best_params.get(
+                    "wt_long_emergency_sl_capital_pct",
+                    WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
+                ),
+                "best_wt_long_emergency_sl_enabled": bool(
+                    best_params.get("wt_long_emergency_sl_enabled", False)
+                ),
                 "trade_direction": best_params.get("trade_direction", "long"),
                 "allow_longs": bool(best_params.get("allow_longs", True)),
                 "allow_shorts": bool(best_params.get("allow_shorts", False)),
@@ -470,6 +496,7 @@ def walk_forward_optimization(
                 f"close_h1={best_params.get('wt_long_close_min_level', WT_LONG_CLOSE_MIN_LEVEL):.1f} "
                 f"open_h4={best_params.get('wt_h4_long_filter_max', WT_H4_LONG_FILTER_MAX):.1f} "
                 f"close_h4={best_params.get('wt_h4_long_close_min', WT_H4_LONG_CLOSE_MIN):.1f} "
+                f"sl={best_params.get('wt_long_emergency_sl_capital_pct', WT_LONG_EMERGENCY_SL_CAPITAL_PCT) * 100:.0f}% "
                 f"short=off"
             )
 
@@ -564,6 +591,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_h4_short_filter_min" in recent.columns
         else WT_H4_SHORT_FILTER_MIN
     )
+    long_emergency_sl_capital_pct = (
+        float(recent["best_wt_long_emergency_sl_capital_pct"].mode().iloc[0])
+        if "best_wt_long_emergency_sl_capital_pct" in recent.columns
+        else WT_LONG_EMERGENCY_SL_CAPITAL_PCT
+    )
     allow_longs = True
     allow_shorts = False
     trade_direction = "long"
@@ -591,6 +623,7 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_h4_long_filter_max": h4_long_filter_max,
         "wt_h4_long_close_min": h4_long_close_min,
         "wt_h4_short_filter_min": h4_short_filter_min,
-        "wt_long_emergency_sl_enabled": False,
+        "wt_long_emergency_sl_enabled": long_emergency_sl_capital_pct > 0.0,
+        "wt_long_emergency_sl_capital_pct": long_emergency_sl_capital_pct,
     }
 

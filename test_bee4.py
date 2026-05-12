@@ -72,7 +72,7 @@ BASE_PARAMS = {
     "wt_long_tp2_pct": 0.02,
     "wt_long_tp2_fraction": 1.0 / 3.0,
     "wt_long_emergency_sl_enabled": False,
-    "wt_long_emergency_sl_capital_pct": 0.02,
+    "wt_long_emergency_sl_capital_pct": 0.0,
     "wt_short_tp1_enabled": True,
     "wt_short_tp1_pct": 0.01,
     "wt_short_tp1_fraction": 1.0 / 3.0,
@@ -486,7 +486,11 @@ class TestExitSignals:
         bar = _make_bar(wt1=-34.0, wt2=-39.0)
         bar.low = 1760.0
         pos = PositionState(side="long", entry_price=1800.0, entry_time=bar.time)
-        params = dict(BASE_PARAMS, wt_long_emergency_sl_enabled=True)
+        params = dict(
+            BASE_PARAMS,
+            wt_long_emergency_sl_enabled=True,
+            wt_long_emergency_sl_capital_pct=0.02,
+        )
 
         sig = generate_exit_signal(bar, prev, params, pos)
 
@@ -506,7 +510,11 @@ class TestExitSignals:
             tp1_taken=True,
             tp2_taken=True,
         )
-        params = dict(BASE_PARAMS, wt_long_emergency_sl_enabled=True)
+        params = dict(
+            BASE_PARAMS,
+            wt_long_emergency_sl_enabled=True,
+            wt_long_emergency_sl_capital_pct=0.02,
+        )
 
         sig = generate_exit_signal(bar, prev, params, pos)
 
@@ -958,6 +966,7 @@ class TestBacktestAccounting:
             slippage_bps=0.0,
             spread_bps=0.0,
             wt_long_emergency_sl_enabled=True,
+            wt_long_emergency_sl_capital_pct=0.02,
         )
         strat = Bee4Strategy(params, fee_rate=0.0)
 
@@ -1045,6 +1054,7 @@ class TestWFOHelpers:
                 "best_wt_h4_long_filter_max": [-20.0, -20.0, -30.0],
                 "best_wt_h4_long_close_min": [0.0, 20.0, 20.0],
                 "best_wt_h4_short_filter_min": [50.0, 50.0, 60.0],
+                "best_wt_long_emergency_sl_capital_pct": [0.0, 0.05, 0.05],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
                 "n_trades_live": [2, 1, 1],
@@ -1067,7 +1077,8 @@ class TestWFOHelpers:
         assert best["wt_h4_long_filter_max"] == pytest.approx(-20.0)
         assert best["wt_h4_long_close_min"] == pytest.approx(20.0)
         assert best["wt_h4_short_filter_min"] == pytest.approx(50.0)
-        assert best["wt_long_emergency_sl_enabled"] is False
+        assert best["wt_long_emergency_sl_enabled"] is True
+        assert best["wt_long_emergency_sl_capital_pct"] == pytest.approx(0.05)
 
     def test_wfo_accepts_bee4_2_grid_overrides(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
@@ -1100,6 +1111,7 @@ class TestWFOHelpers:
             "wt_h4_long_filter_max": [-20.0],
             "wt_h4_long_close_min": [0.0],
             "wt_h4_short_filter_min": [50.0],
+            "wt_long_emergency_sl_capital_pct": [0.05],
         }
 
         _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
@@ -1125,6 +1137,8 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_h4_long_filter_max"]) == {-20.0}
         assert set(windows_df["best_wt_h4_long_close_min"]) == {0.0}
         assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
+        assert set(windows_df["best_wt_long_emergency_sl_capital_pct"]) == {0.05}
+        assert set(windows_df["best_wt_long_emergency_sl_enabled"]) == {True}
 
     def test_wfo_can_stop_during_first_window(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")

@@ -58,7 +58,7 @@ WT_LONG_TP2_ENABLED = True
 WT_LONG_TP2_PCT = 0.02
 WT_LONG_TP2_FRACTION = 1.0 / 3.0
 WT_LONG_EMERGENCY_SL_ENABLED = False
-WT_LONG_EMERGENCY_SL_CAPITAL_PCT = 0.02
+WT_LONG_EMERGENCY_SL_CAPITAL_PCT = 0.0
 WT_SHORT_TP1_ENABLED = True
 WT_SHORT_TP1_PCT = 0.01
 WT_SHORT_TP1_FRACTION = 1.0 / 3.0
@@ -101,6 +101,8 @@ WT_H4_LONG_CLOSE_MIN_GRID = [0.0, 10.0, 20.0]
 WT_H4_LONG_CLOSE_MIN_OPTIONS = [0.0, 10.0, 20.0, 30.0, 40.0]
 WT_H4_SHORT_FILTER_MIN_GRID = [30.0, 40.0, 50.0, 60.0]
 WT_H4_SHORT_FILTER_MIN_OPTIONS = [30.0, 40.0, 50.0, 60.0]
+WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID = [0.0, 0.01, 0.02, 0.05, 0.10]
+WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS = [0.0, 0.01, 0.02, 0.05, 0.10]
 
 # Compatibility aliases kept so the bee1 dashboard structure can stay intact
 TP_GRID = WT_CHANNEL_LEN_GRID
@@ -200,7 +202,11 @@ def load_params() -> dict:
     params["allow_longs"] = True
     params["allow_shorts"] = False
     params["short_trading_enabled"] = False
-    params["wt_long_emergency_sl_enabled"] = False
+    sl_pct = float(params.get("wt_long_emergency_sl_capital_pct", 0.0) or 0.0)
+    params["wt_long_emergency_sl_capital_pct"] = sl_pct
+    params["wt_long_emergency_sl_enabled"] = bool(
+        params.get("wt_long_emergency_sl_enabled", False)
+    ) and sl_pct > 0.0
     params["atr_stop_enabled"] = False
 
     return params
