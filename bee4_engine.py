@@ -248,23 +248,9 @@ def _h4_converging(bar: BarData, side: Side) -> bool:
 
 
 def _h4_long_momentum_improving(bar: BarData) -> bool:
-    if any(
-        np.isnan(v)
-        for v in [
-            bar.h4_wt1,
-            bar.h4_wt2,
-            bar.h4_prev_wt1,
-            bar.h4_prev_wt2,
-            bar.h4_wt_delta,
-            bar.h4_prev_wt_delta,
-        ]
-    ):
+    if any(np.isnan(v) for v in [bar.h4_wt_delta, bar.h4_prev_wt_delta]):
         return False
-    return (
-        bar.h4_wt_delta > bar.h4_prev_wt_delta
-        and bar.h4_wt1 > bar.h4_prev_wt1
-        and bar.h4_wt2 > bar.h4_prev_wt2
-    )
+    return bar.h4_wt_delta > bar.h4_prev_wt_delta
 
 
 def _h4_filter_ok(bar: BarData, side: Side, params: dict) -> bool:
@@ -329,7 +315,7 @@ def generate_entry_signal(
     Entry logic for BEE4_4:
       - long on a fresh or recent H1 bullish cross in a low H1 zone
       - short immediately on fresh H1 bearish cross in a deep positive H1 zone
-      - long uses H4 filter: low/neutral H4 zone + improving delta + rising H4 lines
+      - long uses a softer H4 filter: low/neutral H4 zone + improving H4 delta
     """
     if position is not None:
         return Signal(action="none")

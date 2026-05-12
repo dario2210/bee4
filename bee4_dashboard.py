@@ -31,8 +31,6 @@ from bee4_params import (
     WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS,
 )
 from bee4_data     import (
-    htf_prev_wt1_column,
-    htf_prev_wt2_column,
     htf_wt1_column,
     htf_wt2_column,
     load_klines,
@@ -549,7 +547,7 @@ def hero_banner() -> html.Div:
             html.Div("Note", className="hero-note-title"),
             html.P(
                 "Long moze pojawic sie na zielonej kropce H1 albo kilka swiec po niej, gdy H1 jest w strefie open. "
-                "H4 filtruje kontekst przez poziom open, poprawiajaca sie delte i rosnace linie WT1/WT2, a wyjscie longa wymaga close level H1/H4 oraz slabniecia H1."
+                "H4 filtruje kontekst przez poziom open i poprawiajaca sie delte, a wyjscie longa wymaga close level H1/H4 oraz slabniecia H1."
             ),
         ], className="hero-note"),
     ], className="hero-panel")
@@ -1609,35 +1607,22 @@ def _active_trade_at(trades_df: pd.DataFrame, ts: pd.Timestamp) -> dict[str, obj
     }
 
 
-def _diag_h4_state(
-    row: pd.Series,
-    side: str,
-    params: dict,
-    h4_wt1_col: str,
-    h4_wt2_col: str,
-    h4_prev_wt1_col: str,
-    h4_prev_wt2_col: str,
-) -> tuple[bool, str]:
+def _diag_h4_state(row: pd.Series, side: str, params: dict, h4_wt1_col: str, h4_wt2_col: str) -> tuple[bool, str]:
     h4_wt1 = _as_float(row.get(h4_wt1_col, np.nan), np.nan)
     h4_wt2 = _as_float(row.get(h4_wt2_col, np.nan), np.nan)
-    h4_prev_wt1 = _as_float(row.get(h4_prev_wt1_col, np.nan), np.nan)
-    h4_prev_wt2 = _as_float(row.get(h4_prev_wt2_col, np.nan), np.nan)
     h4_delta = h4_wt1 - h4_wt2 if not np.isnan(h4_wt1) and not np.isnan(h4_wt2) else np.nan
     h4_prev_delta = _as_float(row.get("h4_prev_wt_delta", np.nan), np.nan)
-    if any(np.isnan(v) for v in [h4_wt1, h4_wt2, h4_prev_wt1, h4_prev_wt2, h4_delta, h4_prev_delta]):
+    if any(np.isnan(v) for v in [h4_wt1, h4_wt2, h4_delta, h4_prev_delta]):
         return False, "brak danych H4"
 
     if side == "long":
         threshold = float(params.get("wt_h4_long_filter_max", DEFAULT_PARAMS["wt_h4_long_filter_max"]))
         in_zone = h4_wt1 <= threshold and h4_wt2 <= threshold
         improving = h4_delta > h4_prev_delta
-        lines_rising = h4_wt1 > h4_prev_wt1 and h4_wt2 > h4_prev_wt2
         if not in_zone:
             return False, f"H4 za wysoko (WT1/WT2 muszą być <= {threshold:g})"
         if not improving:
             return False, "delta H4 nie poprawia się dla longa"
-        if not lines_rising:
-            return False, "linie H4 WT1/WT2 nie rosną dla longa"
         return True, "H4 OK"
 
     threshold = float(params.get("wt_h4_short_filter_min", DEFAULT_PARAMS["wt_h4_short_filter_min"]))
@@ -1661,8 +1646,6 @@ def _diagnostic_rejection(
     h1_wt2_col: str,
     h4_wt1_col: str,
     h4_wt2_col: str,
-    h4_prev_wt1_col: str,
-    h4_prev_wt2_col: str,
     active_trade: dict[str, object] | None,
 ) -> tuple[str, str]:
     wt1 = _as_float(row.get(h1_wt1_col, np.nan), np.nan)
@@ -1691,15 +1674,7 @@ def _diagnostic_rejection(
     if np.isnan(level_now) or level_now < min_level:
         return "level", f"za słaby poziom WT ({_fmt_diag(level_now)} < {min_level:g})"
 
-    h4_ok, h4_reason = _diag_h4_state(
-        row,
-        side,
-        params,
-        h4_wt1_col,
-        h4_wt2_col,
-        h4_prev_wt1_col,
-        h4_prev_wt2_col,
-    )
+    h4_ok, h4_reason = _diag_h4_state(row, side, params, h4_wt1_col, h4_wt2_col)
     if not h4_ok:
         return "h4", h4_reason
 
@@ -1717,8 +1692,6 @@ def _diagnostic_signal_overlays(
     h1_wt2_col: str,
     h4_wt1_col: str,
     h4_wt2_col: str,
-    h4_prev_wt1_col: str,
-    h4_prev_wt2_col: str,
     filter_mode: str = "all",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     if df.empty or h1_wt1_col not in df.columns or h1_wt2_col not in df.columns:
@@ -1776,8 +1749,6 @@ def _diagnostic_signal_overlays(
                 h1_wt2_col,
                 h4_wt1_col,
                 h4_wt2_col,
-                h4_prev_wt1_col,
-                h4_prev_wt2_col,
                 active_trade,
             )
             color = colors.get(code, colors["other"])
@@ -1919,18 +1890,10 @@ def lightweight_chart_payload(
     h1_wt1_col, h1_wt2_col = wt_columns(channel_len, avg_len, signal_len)
     h4_wt1_col = htf_wt1_column(channel_len, avg_len, h4_interval)
     h4_wt2_col = htf_wt2_column(channel_len, avg_len, signal_len, h4_interval)
-    h4_prev_wt1_col = htf_prev_wt1_column(channel_len, avg_len, h4_interval)
-    h4_prev_wt2_col = htf_prev_wt2_column(channel_len, avg_len, signal_len, h4_interval)
     if h1_wt1_col not in df.columns or h1_wt2_col not in df.columns:
         h1_wt1_col, h1_wt2_col = "wt1", "wt2"
-    if (
-        h4_wt1_col not in df.columns
-        or h4_wt2_col not in df.columns
-        or h4_prev_wt1_col not in df.columns
-        or h4_prev_wt2_col not in df.columns
-    ):
+    if h4_wt1_col not in df.columns or h4_wt2_col not in df.columns:
         h4_wt1_col, h4_wt2_col = "h4_wt1", "h4_wt2"
-        h4_prev_wt1_col, h4_prev_wt2_col = "h4_prev_wt1", "h4_prev_wt2"
 
     signal_specs = [
         (h1_wt1_col, f"WT1 H1 ({channel_len}/{avg_len})", C["blue"], 2.0, True, 0),
@@ -1967,8 +1930,6 @@ def lightweight_chart_payload(
             h1_wt2_col,
             h4_wt1_col,
             h4_wt2_col,
-            h4_prev_wt1_col,
-            h4_prev_wt2_col,
             filter_mode=filter_mode,
         )
         signal_markers = diagnostic_signal_markers + h4_cross_markers
