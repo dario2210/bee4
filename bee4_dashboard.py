@@ -2430,7 +2430,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_4: short jest wyłączony. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, TP2 kolejną 1/3 przy +2%. Stop loss może być wyłączony albo ustawiony na 1/2/5/10%.",
+                "BEE4_4: short jest wyłączony. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, a jeżeli przed TP2 cena wróci do wejścia, reszta wychodzi na break-even. Stop loss może być wyłączony albo ustawiony na 1/2/5/10%.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),

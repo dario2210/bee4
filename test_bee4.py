@@ -68,6 +68,7 @@ BASE_PARAMS = {
     "wt_long_tp1_enabled": True,
     "wt_long_tp1_pct": 0.01,
     "wt_long_tp1_fraction": 1.0 / 3.0,
+    "wt_long_tp1_breakeven_enabled": True,
     "wt_long_tp2_enabled": True,
     "wt_long_tp2_pct": 0.02,
     "wt_long_tp2_fraction": 1.0 / 3.0,
@@ -541,6 +542,63 @@ class TestExitSignals:
 
         assert sig.action == "none"
 
+    def test_long_tp1_breakeven_does_not_trigger_on_tp1_bar(self):
+        prev = _make_bar(wt1=-34.0, wt2=-39.0)
+        bar = _make_bar(wt1=-33.0, wt2=-38.0)
+        bar.low = 1798.0
+        pos = PositionState(
+            side="long",
+            entry_price=1800.0,
+            entry_time=bar.time,
+            remaining_fraction=2.0 / 3.0,
+            tp1_taken=True,
+            tp1_protection_after_bars=1,
+        )
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "none"
+
+    def test_long_tp1_breakeven_closes_remaining_before_tp2(self):
+        prev = _make_bar(wt1=-34.0, wt2=-39.0)
+        bar = _make_bar(wt1=-33.0, wt2=-38.0)
+        bar.low = 1798.0
+        pos = PositionState(
+            side="long",
+            entry_price=1800.0,
+            entry_time=bar.time,
+            bars_in_position=1,
+            remaining_fraction=2.0 / 3.0,
+            tp1_taken=True,
+            tp1_protection_after_bars=1,
+        )
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "LONG_TP1_BREAKEVEN_EXIT"
+        assert sig.exit_price == pytest.approx(1800.0)
+        assert sig.meta["remaining_fraction_before"] == pytest.approx(2.0 / 3.0)
+
+    def test_long_tp1_breakeven_does_not_trigger_after_tp2(self):
+        prev = _make_bar(wt1=-34.0, wt2=-39.0)
+        bar = _make_bar(wt1=-33.0, wt2=-38.0)
+        bar.low = 1798.0
+        pos = PositionState(
+            side="long",
+            entry_price=1800.0,
+            entry_time=bar.time,
+            bars_in_position=1,
+            remaining_fraction=1.0 / 3.0,
+            tp1_taken=True,
+            tp2_taken=True,
+            tp1_protection_after_bars=1,
+        )
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "none"
+
     def test_short_tp1_closes_one_third_when_price_drops_one_percent(self):
         bar = _make_bar(close=1800.0)
         bar.low = 1780.0
@@ -954,6 +1012,31 @@ class TestBacktestAccounting:
         assert trades.iloc[0]["time_to_tp1_hours"] == pytest.approx(1.0)
         assert np.isnan(trades.iloc[1]["time_to_tp1_hours"])
         assert trades["logical_trade_no"].nunique() == 1
+        assert final_cap > 9_000.0
+
+    def test_tp1_breakeven_closes_remaining_when_price_returns_to_entry(self):
+        df = _signal_df()
+        df.loc[3, "low"] = 1805.0
+        params = dict(
+            LONG_ONLY_PARAMS,
+            fee_rate=0.0,
+            slippage_bps=0.0,
+            spread_bps=0.0,
+            wt_long_tp2_enabled=False,
+            wt_long_close_min_level=999.0,
+            wt_h4_long_close_min=999.0,
+        )
+        strat = Bee4Strategy(params, fee_rate=0.0)
+
+        trades, _equity, final_cap = strat.run(df, 9_000.0)
+
+        assert list(trades["reason"]) == [
+            "LONG_TP1_PARTIAL",
+            "LONG_TP1_BREAKEVEN_EXIT",
+        ]
+        assert list(trades["trade_event"]) == ["TP1", "EXIT"]
+        assert trades.iloc[1]["close_fraction"] == pytest.approx(2.0 / 3.0)
+        assert trades.iloc[1]["exit_price"] == pytest.approx(trades.iloc[1]["entry_price"])
         assert final_cap > 9_000.0
 
     def test_emergency_stop_has_priority_over_tp_on_same_bar(self):

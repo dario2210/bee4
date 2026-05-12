@@ -54,6 +54,7 @@ WT_H4_SHORT_FILTER_MIN = 50.0
 WT_LONG_TP1_ENABLED = True
 WT_LONG_TP1_PCT = 0.01
 WT_LONG_TP1_FRACTION = 1.0 / 3.0
+WT_LONG_TP1_BREAKEVEN_ENABLED = True
 WT_LONG_TP2_ENABLED = True
 WT_LONG_TP2_PCT = 0.02
 WT_LONG_TP2_FRACTION = 1.0 / 3.0
@@ -146,6 +147,7 @@ DEFAULT_PARAMS = {
     "wt_long_tp1_enabled": WT_LONG_TP1_ENABLED,
     "wt_long_tp1_pct": WT_LONG_TP1_PCT,
     "wt_long_tp1_fraction": WT_LONG_TP1_FRACTION,
+    "wt_long_tp1_breakeven_enabled": WT_LONG_TP1_BREAKEVEN_ENABLED,
     "wt_long_tp2_enabled": WT_LONG_TP2_ENABLED,
     "wt_long_tp2_pct": WT_LONG_TP2_PCT,
     "wt_long_tp2_fraction": WT_LONG_TP2_FRACTION,

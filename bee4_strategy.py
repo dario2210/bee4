@@ -202,6 +202,7 @@ class Bee4Strategy:
                 pos.tp2_taken = True
             elif "TP1" in signal.reason:
                 pos.tp1_taken = True
+                pos.tp1_protection_after_bars = pos.bars_in_position + 1
             self.position = pos
         else:
             self.position = None

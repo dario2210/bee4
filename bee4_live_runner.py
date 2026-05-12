@@ -69,6 +69,7 @@ def load_state() -> dict:
             "remaining_fraction": 1.0,
             "tp1_taken": False,
             "tp2_taken": False,
+            "tp1_protection_after_bars": 0,
             "h1_red_close_count": 0,
             "h1_green_close_count": 0,
             "trade_id": 0,
@@ -149,6 +150,7 @@ def position_from_state(state: dict) -> Optional[PositionState]:
         remaining_fraction=float(state.get("remaining_fraction", 1.0)),
         tp1_taken=bool(state.get("tp1_taken", False)),
         tp2_taken=bool(state.get("tp2_taken", False)),
+        tp1_protection_after_bars=int(state.get("tp1_protection_after_bars", 0)),
         h1_red_close_count=int(state.get("h1_red_close_count", 0)),
         h1_green_close_count=int(state.get("h1_green_close_count", 0)),
         trade_id=int(state.get("trade_id", 0)),
@@ -167,6 +169,7 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["remaining_fraction"] = 1.0
         state["tp1_taken"] = False
         state["tp2_taken"] = False
+        state["tp1_protection_after_bars"] = 0
         state["h1_red_close_count"] = 0
         state["h1_green_close_count"] = 0
         state["trade_id"] = 0
@@ -180,6 +183,7 @@ def position_to_state(state: dict, pos: Optional[PositionState]) -> None:
         state["remaining_fraction"] = pos.remaining_fraction
         state["tp1_taken"] = pos.tp1_taken
         state["tp2_taken"] = pos.tp2_taken
+        state["tp1_protection_after_bars"] = pos.tp1_protection_after_bars
         state["h1_red_close_count"] = pos.h1_red_close_count
         state["h1_green_close_count"] = pos.h1_green_close_count
         state["trade_id"] = pos.trade_id
@@ -302,6 +306,7 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
                 position.tp2_taken = True
             elif "TP1" in sig.reason:
                 position.tp1_taken = True
+                position.tp1_protection_after_bars = position.bars_in_position + 1
             position_to_state(state, position)
         return capital
 

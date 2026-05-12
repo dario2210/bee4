@@ -72,6 +72,7 @@ class PositionState:
     remaining_fraction: float = 1.0
     tp1_taken: bool = False
     tp2_taken: bool = False
+    tp1_protection_after_bars: int = 0
     h1_red_close_count: int = 0
     h1_green_close_count: int = 0
     trade_id: int = 0
@@ -553,6 +554,23 @@ def generate_exit_signal(
         if emergency_sig.action != "none":
             emergency_sig.meta["bars_in_position"] = position.bars_in_position
             return emergency_sig
+        if (
+            bool(params.get("wt_long_tp1_breakeven_enabled", True))
+            and position.tp1_taken
+            and not position.tp2_taken
+            and position.bars_in_position > int(position.tp1_protection_after_bars or 0)
+            and not np.isnan(bar.low)
+            and bar.low <= position.entry_price
+        ):
+            meta = _meta("LONG_TP1_BREAKEVEN_EXIT")
+            meta["breakeven_price"] = round(position.entry_price, 4)
+            meta["remaining_fraction_before"] = position.remaining_fraction
+            return Signal(
+                action="close_force",
+                reason="LONG_TP1_BREAKEVEN_EXIT",
+                exit_price=position.entry_price,
+                meta=meta,
+            )
         if _cross_down(bar, prev_bar):
             position.h1_red_close_count += 1
         if _long_close_level_ok(bar, params) and _long_exit_momentum_weakening(bar, prev_bar):
