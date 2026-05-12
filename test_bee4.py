@@ -977,6 +977,27 @@ class TestBacktestAccounting:
         assert len(trades) == 1
         assert final_cap < 9_000.0
 
+    def test_open_position_at_data_end_is_not_force_closed(self):
+        df = _signal_df()
+        params = dict(
+            LONG_ONLY_PARAMS,
+            fee_rate=0.0,
+            slippage_bps=0.0,
+            spread_bps=0.0,
+            wt_long_tp1_enabled=False,
+            wt_long_tp2_enabled=False,
+            wt_long_close_min_level=999.0,
+            wt_h4_long_close_min=999.0,
+            wt_long_emergency_sl_enabled=False,
+        )
+        strat = Bee4Strategy(params, fee_rate=0.0)
+
+        trades, equity, final_cap = strat.run(df, 9_000.0)
+
+        assert trades.empty
+        assert final_cap == pytest.approx(9_000.0)
+        assert equity.iloc[-1]["time"] == df.iloc[-1]["time"]
+
 
 class TestWFOHelpers:
     def test_wfo_bars_1h(self):

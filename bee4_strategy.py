@@ -283,11 +283,13 @@ class Bee4Strategy:
                     capital_at_open = capital
 
         if self.position is not None:
-            last_bar = bar_from_row(df.iloc[-1], self.params)
-            force_sig = Signal(action="close_force", reason="FORCE_EXIT_END", exit_price=last_bar.close)
-            rec, capital = self._close_position(capital, last_bar, force_sig, capital_at_open)
-            trades.append(rec)
-            equity_curve.append((last_bar.time, capital))
+            # Do not turn an unfinished trade into a synthetic closed trade.
+            # This keeps FORCE_EXIT_END out of trade statistics such as Sharpe,
+            # expectancy and winrate while preserving the tested time range.
+            last_time = df["time"].iloc[-1]
+            if not equity_curve or equity_curve[-1][0] != last_time:
+                equity_curve.append((last_time, capital))
+            self.position = None
 
         cols = [
             "side",
