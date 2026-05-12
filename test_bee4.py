@@ -120,7 +120,7 @@ def _make_bar(
     h4_wt1=-28.0,
     h4_wt2=-22.0,
     h4_prev_wt1=-34.0,
-    h4_prev_wt2=-22.0,
+    h4_prev_wt2=-26.0,
 ):
     return BarData(
         time=pd.Timestamp("2024-01-01 00:00:00", tz="UTC"),
@@ -170,7 +170,7 @@ def _signal_df() -> pd.DataFrame:
     wt1_vals = [-48.0, -34.0, 44.0, 50.0]
     wt2_vals = [-42.0, -44.0, 36.0, 56.0]
     h4_wt1_vals = [-34.0, -28.0, 62.0, 58.0]
-    h4_wt2_vals = [-22.0, -22.0, 50.0, 52.0]
+    h4_wt2_vals = [-26.0, -22.0, 50.0, 52.0]
 
     df = pd.DataFrame(
         {
@@ -314,8 +314,8 @@ class TestEntrySignals:
             wt2=-42.0,
             h4_wt1=2.0,
             h4_wt2=-2.0,
-            h4_prev_wt1=0.0,
-            h4_prev_wt2=-2.0,
+            h4_prev_wt1=-2.0,
+            h4_prev_wt2=-5.0,
         )
         bar.bars_since_wt_green_dot = 2.0
 
@@ -323,6 +323,21 @@ class TestEntrySignals:
 
         assert sig.action == "open_long"
         assert sig.reason == "WT_H1_GREEN_WINDOW_H4_SOFT_FILTER"
+
+    def test_no_long_when_h4_delta_improves_but_lines_fall(self):
+        prev = _make_bar(wt1=-70.3933, wt2=-69.4598)
+        bar = _make_bar(
+            wt1=-67.8488,
+            wt2=-69.6110,
+            h4_wt1=-30.2312,
+            h4_wt2=-22.1736,
+            h4_prev_wt1=-21.8851,
+            h4_prev_wt2=-12.6480,
+        )
+
+        sig = generate_entry_signal(bar, prev, BASE_PARAMS, None)
+
+        assert sig.action == "none"
 
     def test_no_long_without_h4_convergence(self):
         prev = _make_bar(wt1=-48.0, wt2=-42.0)
