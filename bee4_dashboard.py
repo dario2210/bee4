@@ -86,6 +86,27 @@ def ss(**kw):
             _state["result_version"] += 1
         _state.update(kw)
 
+def _fmt_duration(seconds: float | int | None) -> str:
+    try:
+        seconds = int(max(0, float(seconds)))
+    except Exception:
+        return "n/d"
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+def _elapsed_eta(start_ts: float, done_units: int, total_units: int) -> tuple[str, str]:
+    elapsed = max(0.0, _time.time() - float(start_ts or _time.time()))
+    if done_units <= 0 or total_units <= 0:
+        return _fmt_duration(elapsed), "liczę..."
+    per_unit = elapsed / max(done_units, 1)
+    remaining = max(0, total_units - done_units) * per_unit
+    return _fmt_duration(elapsed), _fmt_duration(remaining)
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 lbl = lambda t: html.Div(t, style={
     "fontSize":"11px","color":C["muted"],"marginBottom":"4px",
@@ -2940,7 +2961,11 @@ def _worker(
         )
 
         if run_mode == "backtest":
-            ss(status="Backtest w toku...", progress="")
+            bt_started_at = _time.time()
+            ss(
+                status="Backtest w toku...",
+                progress=f"Przetwarzam {len(df)} świec  |  czas 0s  |  ETA liczę...",
+            )
             strat = Bee4Strategy(strategy_params, fee_rate=fee_rate_val)
             trades_bt, equity_bt, _ = strat.run(df, capital)
             stats = compute_stats(trades_bt, equity_bt, capital, print_output=False)
@@ -2967,12 +2992,13 @@ def _worker(
             }
             n = len(trades_bt)
             ret = stats.get("net_return_pct", 0)
+            bt_elapsed = _fmt_duration(_time.time() - bt_started_at)
             ss(
                 running=False,
                 stop=False,
                 result=result,
                 status=f"✓ Backtest gotowy  |  {n} tradów  |  {ret:+.2f}%",
-                progress="",
+                progress=f"Czas wykonania: {bt_elapsed}",
             )
             return
 
@@ -2999,24 +3025,37 @@ def _worker(
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
         total  = max(0, (len(df)-ob)//lb)
         combo_total = _grid_combo_count(grid_overrides)
+        wfo_started_at = _time.time()
+        progress_total_windows = max(total, 1)
+        progress_combo_total = max(combo_total, 1)
+        total_progress_units = max(1, progress_total_windows * progress_combo_total)
+
+        def _wfo_progress_text(wid, total_windows, combo_idx, combo_count):
+            total_windows = max(int(total_windows or 0), 1)
+            combo_count = max(int(combo_count or 0), 1)
+            window_idx = max(0, min(int(wid or 0), total_windows - 1))
+            combo_idx = max(0, min(int(combo_idx or 0), combo_count))
+            done_units = min(total_progress_units, window_idx * combo_count + combo_idx)
+            elapsed, eta = _elapsed_eta(wfo_started_at, done_units, total_progress_units)
+            window_pct = combo_idx / combo_count * 100.0
+            total_pct = done_units / total_progress_units * 100.0
+            return (
+                f"Okno {window_idx + 1} / {total_windows}  |  "
+                f"kombinacja {combo_idx} / {combo_count}  |  "
+                f"{window_pct:.0f}% okna  |  całość {total_pct:.1f}%  |  "
+                f"czas {elapsed}  |  ETA {eta}"
+            )
+
         ss(
             status=f"WFO w toku  |  ~{total} okien  |  {combo_total} kombinacji/okno",
-            progress=f"Okno 1 / {max(total, 1)}  |  kombinacja 0 / {combo_total}",
+            progress=_wfo_progress_text(0, progress_total_windows, 0, progress_combo_total),
         )
 
         def _on_combo_progress(wid, total_windows, combo_idx, combo_total):
-            total_windows = max(int(total_windows or 0), 1)
-            window_no = int(wid) + 1
-            pct = (combo_idx / combo_total * 100.0) if combo_total else 0.0
-            ss(
-                progress=(
-                    f"Okno {window_no} / {total_windows}  |  "
-                    f"kombinacja {combo_idx} / {combo_total}  |  {pct:.0f}%"
-                )
-            )
+            ss(progress=_wfo_progress_text(wid, total_windows, combo_idx, combo_total))
 
         def _on_window_done(wid, total, wstats, trades_list, equity_sofar, cap_sofar):
-            ss(progress=f"Okno {wid + 1} / {total}  |  kombinacja {combo_total} / {combo_total}  |  100%")
+            ss(progress=_wfo_progress_text(wid, total, combo_total, combo_total))
             # Zbuduj wynik cząstkowy i od razu go wyświetl
             try:
                 all_tr = pd.concat(trades_list, ignore_index=True) \
@@ -3094,20 +3133,21 @@ def _worker(
         nw  = len(windows_df) if windows_df is not None and not windows_df.empty else 0
         n   = len(all_trades) if all_trades is not None and not all_trades.empty else 0
         ret = stats.get("net_return_pct", 0)
+        wfo_elapsed = _fmt_duration(_time.time() - wfo_started_at)
         if stopped:
             ss(
                 running=False,
                 stop=False,
                 result=result,
                 status=f"Zatrzymano  |  ukończone okna {nw}/{total}  |  {n} tradów  |  {ret:+.2f}%",
-                progress="",
+                progress=f"Czas wykonania: {wfo_elapsed}",
             )
             return
 
         ss(running=False, stop=False, result=result,
            status=f"✓ WFO gotowe  |  {nw} okien  |  {n} tradów  |  {ret:+.2f}%"
                   + ("  |  zapisano best params" if best_params else ""),
-           progress="")
+           progress=f"Czas wykonania: {wfo_elapsed}")
 
     except Exception as e:
         import traceback
