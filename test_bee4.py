@@ -1344,5 +1344,45 @@ class TestBacktestRunnerParity:
         assert list(bt_real["reason"]) == [t["reason"] for t in runner_trades]
 
 
+class TestPineExport:
+    def test_repeated_wfo_logical_ids_get_unique_pine_open_markers(self):
+        from bee4_dashboard import _build_pine_trades_overlay
+
+        result = {
+            "symbol": "ETHUSDT",
+            "tf": "1h",
+            "mode": "wfo",
+            "trades": [
+                {
+                    "side": "long",
+                    "entry_time": "2025-01-01 00:00:00",
+                    "exit_time": "2025-01-01 03:00:00",
+                    "entry_price": 1000.0,
+                    "exit_price": 1010.0,
+                    "logical_trade_no": 1,
+                    "trade_event": "EXIT",
+                    "pnl": 100.0,
+                },
+                {
+                    "side": "long",
+                    "entry_time": "2025-02-01 00:00:00",
+                    "exit_time": "2025-02-01 03:00:00",
+                    "entry_price": 1100.0,
+                    "exit_price": 1110.0,
+                    "logical_trade_no": 1,
+                    "trade_event": "EXIT",
+                    "pnl": 100.0,
+                },
+            ],
+        }
+
+        pine = _build_pine_trades_overlay(result)
+
+        assert "OPEN LONG" in pine
+        assert 'f_add(timestamp("UTC",2025,1,1,0,0),"OPEN_LONG",1000,1,"T1 OPEN"' in pine
+        assert 'f_add(timestamp("UTC",2025,2,1,0,0),"OPEN_LONG",1100,2,"T2 OPEN"' in pine
+        assert 'text="LONG"' in pine
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

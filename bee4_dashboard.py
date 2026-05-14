@@ -1329,7 +1329,9 @@ def _pine_trade_add_lines(result_data: dict) -> list[str]:
         return []
 
     lines: list[str] = []
-    added_entries: set[int] = set()
+    added_entries: set[tuple] = set()
+    pine_trade_numbers: dict[tuple, int] = {}
+    next_pine_trade_no = 1
 
     for idx, trade in trades_df.iterrows():
         side = str(trade.get("side", "")).strip().lower()
@@ -1347,26 +1349,42 @@ def _pine_trade_add_lines(result_data: dict) -> list[str]:
             logical_trade_no = int(float(trade.get("logical_trade_no", trade.get("trade_no", idx + 1))))
         except Exception:
             logical_trade_no = int(idx) + 1
+        trade_key = (
+            side,
+            logical_trade_no,
+            pd.Timestamp(trade.get("entry_time")).isoformat() if pd.notna(trade.get("entry_time")) else entry_ts,
+            round(float(entry_price), 8),
+        )
+        if trade_key not in pine_trade_numbers:
+            pine_trade_numbers[trade_key] = next_pine_trade_no
+            next_pine_trade_no += 1
+        pine_trade_no = pine_trade_numbers[trade_key]
+
         pnl = _pine_number(trade.get("pnl", 0.0), 8)
         direction = side.upper()
-        entry_action, exit_action = ("BUY", "SELL") if side == "long" else ("SELL", "BUY")
+        entry_kind = "OPEN_LONG" if side == "long" else "OPEN_SHORT"
         event = str(trade.get("trade_event", "") or "").strip().upper()
         if not event:
             reason = str(trade.get("reason", "")).upper()
             event = "TP2" if "TP2_PARTIAL" in reason else "TP1" if "TP1_PARTIAL" in reason else "EXIT"
-        entry_comment = f"T{logical_trade_no} OPEN {direction} {entry_action}"
-        exit_comment = f"T{logical_trade_no} {event} {direction} {exit_action}"
+        if event not in ("TP1", "TP2"):
+            event = "EXIT"
+        exit_kind = f"{event}_{direction}"
+        entry_label = f"T{pine_trade_no} OPEN"
+        exit_label = f"T{pine_trade_no} {event}"
+        entry_comment = f"{entry_label} {direction}"
+        exit_comment = f"{exit_label} {direction}"
 
-        if logical_trade_no not in added_entries:
+        if trade_key not in added_entries:
             lines.append(
-                f"    f_add({entry_ts},{_pine_string(entry_action)},{_pine_number(entry_price, 8)},"
-                f"{logical_trade_no},{_pine_string(entry_comment)},{pnl})"
+                f"    f_add({entry_ts},{_pine_string(entry_kind)},{_pine_number(entry_price, 8)},"
+                f"{pine_trade_no},{_pine_string(entry_label)},{_pine_string(entry_comment)},{pnl})"
             )
-            added_entries.add(logical_trade_no)
+            added_entries.add(trade_key)
         if pd.notna(exit_price) and exit_ts is not None:
             lines.append(
-                f"    f_add({exit_ts},{_pine_string(exit_action)},{_pine_number(exit_price, 8)},"
-                f"{logical_trade_no},{_pine_string(exit_comment)},{pnl})"
+                f"    f_add({exit_ts},{_pine_string(exit_kind)},{_pine_number(exit_price, 8)},"
+                f"{pine_trade_no},{_pine_string(exit_label)},{_pine_string(exit_comment)},{pnl})"
             )
 
     return lines
@@ -1395,19 +1413,21 @@ showMarkers = input.bool(true, "Pokaz trojkaty BUY/SELL")
 maxLabelsToDraw = input.int(500, "Maks. etykiet", minval=0, maxval=500)
 
 var int[] txTime = array.new_int()
-var string[] txAction = array.new_string()
+var string[] txKind = array.new_string()
 var float[] txPrice = array.new_float()
 var int[] txTradeNo = array.new_int()
+var string[] txLabel = array.new_string()
 var string[] txComment = array.new_string()
 var float[] txPnl = array.new_float()
 var bool[] drawn = array.new_bool()
 var int labelsDrawn = 0
 
-f_add(_t, _action, _price, _tradeNo, _comment, _pnl) =>
+f_add(_t, _kind, _price, _tradeNo, _label, _comment, _pnl) =>
     array.push(txTime, _t)
-    array.push(txAction, _action)
+    array.push(txKind, _kind)
     array.push(txPrice, _price)
     array.push(txTradeNo, _tradeNo)
+    array.push(txLabel, _label)
     array.push(txComment, _comment)
     array.push(txPnl, _pnl)
     array.push(drawn, false)
@@ -1415,29 +1435,42 @@ f_add(_t, _action, _price, _tradeNo, _comment, _pnl) =>
 if barstate.isfirst
 {events_block}
 
-buyOnBar = false
-sellOnBar = false
+openLongOnBar = false
+openShortOnBar = false
+closeLongOnBar = false
+closeShortOnBar = false
 
 if array.size(txTime) > 0
     for i = 0 to array.size(txTime) - 1
         t = array.get(txTime, i)
-        inBar = time <= t and t < time_close
+        barEnd = na(time_close) ? time + timeframe.in_seconds(timeframe.period) * 1000 : time_close
+        inBar = time <= t and t < barEnd
         if inBar
-            action = array.get(txAction, i)
+            kind = array.get(txKind, i)
             price = array.get(txPrice, i)
+            labelText = array.get(txLabel, i)
             comment = array.get(txComment, i)
             pnl = array.get(txPnl, i)
-            isBuy = action == "BUY"
-            buyOnBar := buyOnBar or isBuy
-            sellOnBar := sellOnBar or not isBuy
+            isOpenLong = kind == "OPEN_LONG"
+            isOpenShort = kind == "OPEN_SHORT"
+            isCloseLong = kind == "TP1_LONG" or kind == "TP2_LONG" or kind == "EXIT_LONG"
+            isCloseShort = kind == "TP1_SHORT" or kind == "TP2_SHORT" or kind == "EXIT_SHORT"
+            drawBelow = isOpenLong or isCloseShort
+            eventColor = isOpenLong ? color.lime : isOpenShort ? color.red : color.orange
+            openLongOnBar := openLongOnBar or isOpenLong
+            openShortOnBar := openShortOnBar or isOpenShort
+            closeLongOnBar := closeLongOnBar or isCloseLong
+            closeShortOnBar := closeShortOnBar or isCloseShort
             if showLabels and not array.get(drawn, i) and labelsDrawn < maxLabelsToDraw
-                txt = comment + (showPrice ? "\\n" + str.tostring(price, format.mintick) : "") + (showPnl ? "\\nPnL: " + str.tostring(pnl, "#.##") : "")
-                label.new(x=bar_index, y=isBuy ? low : high, text=txt, xloc=xloc.bar_index, yloc=isBuy ? yloc.belowbar : yloc.abovebar, style=isBuy ? label.style_label_up : label.style_label_down, color=isBuy ? color.lime : color.red, textcolor=color.white, size=size.small, tooltip=comment)
+                txt = labelText + (showPrice ? "\\n" + str.tostring(price, format.mintick) : "") + (showPnl ? "\\nPnL: " + str.tostring(pnl, "#.##") : "")
+                label.new(x=bar_index, y=drawBelow ? low : high, text=txt, xloc=xloc.bar_index, yloc=drawBelow ? yloc.belowbar : yloc.abovebar, style=drawBelow ? label.style_label_up : label.style_label_down, color=eventColor, textcolor=color.white, size=size.small, tooltip=comment)
                 array.set(drawn, i, true)
                 labelsDrawn := labelsDrawn + 1
 
-plotshape(showMarkers and buyOnBar, title="BUY", style=shape.triangleup, location=location.belowbar, size=size.tiny, color=color.lime, text="BUY")
-plotshape(showMarkers and sellOnBar, title="SELL", style=shape.triangledown, location=location.abovebar, size=size.tiny, color=color.red, text="SELL")
+plotshape(showMarkers and openLongOnBar, title="OPEN LONG", style=shape.triangleup, location=location.belowbar, size=size.small, color=color.lime, text="LONG", textcolor=color.lime)
+plotshape(showMarkers and openShortOnBar, title="OPEN SHORT", style=shape.triangledown, location=location.abovebar, size=size.small, color=color.red, text="SHORT", textcolor=color.red)
+plotshape(showMarkers and closeLongOnBar, title="CLOSE/TP LONG", style=shape.triangledown, location=location.abovebar, size=size.tiny, color=color.orange, text="EXIT", textcolor=color.orange)
+plotshape(showMarkers and closeShortOnBar, title="CLOSE/TP SHORT", style=shape.triangleup, location=location.belowbar, size=size.tiny, color=color.orange, text="EXIT", textcolor=color.orange)
 """
 
 
