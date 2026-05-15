@@ -200,6 +200,7 @@ class Bee4Strategy:
             pos.remaining_fraction = remaining_after
             if "TP2" in signal.reason:
                 pos.tp2_taken = True
+                pos.tp1_protection_after_bars = pos.bars_in_position + 1
             elif "TP1" in signal.reason:
                 pos.tp1_taken = True
                 pos.tp1_protection_after_bars = pos.bars_in_position + 1

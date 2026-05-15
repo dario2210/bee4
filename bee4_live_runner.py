@@ -304,6 +304,7 @@ def process_bar(bar, prev, params: dict, state: dict, mode: str) -> None:
             position.remaining_fraction = remaining_after
             if "TP2" in sig.reason:
                 position.tp2_taken = True
+                position.tp1_protection_after_bars = position.bars_in_position + 1
             elif "TP1" in sig.reason:
                 position.tp1_taken = True
                 position.tp1_protection_after_bars = position.bars_in_position + 1
