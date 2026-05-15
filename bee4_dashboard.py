@@ -76,6 +76,10 @@ CHART_VIEW_OPTIONS = [
     {"label": "Tylko transakcje", "value": "trades"},
 ]
 CHART_VIEW_VALUES = {item["value"] for item in CHART_VIEW_OPTIONS}
+BT_DEFAULT_LONG_OPEN_H1 = -50.0
+BT_DEFAULT_LONG_CLOSE_H1 = 60.0
+BT_DEFAULT_LONG_OPEN_H4 = -50.0
+BT_DEFAULT_LONG_CLOSE_H4 = 60.0
 
 def gs():
     with _lock: return dict(_state)
@@ -113,7 +117,8 @@ lbl = lambda t: html.Div(t, style={
     "fontWeight":"500","letterSpacing":"0.05em","textTransform":"uppercase"})
 
 def inp(id_, val, **kw):
-    return dcc.Input(id=id_, value=val, debounce=True, style={
+    debounce = kw.pop("debounce", True)
+    return dcc.Input(id=id_, value=val, debounce=debounce, style={
         "width":"100%","background":C["surf2"],"border":f"1px solid {C['border']}",
         "borderRadius":"14px","color":C["text"],"padding":"11px 14px","fontSize":"13px",
         "boxSizing":"border-box"}, **kw)
@@ -178,16 +183,89 @@ def _safe_slug(value, fallback="run") -> str:
     return cleaned or fallback
 
 
+def _compact_date_token(value, fallback="na") -> str:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return fallback
+    return ts.strftime("%Y%m%d")
+
+
+def _display_dt(value, fallback="n/d") -> str:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return fallback
+    return ts.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _result_window_token(result_data: dict) -> str:
+    if str(result_data.get("mode", "")).lower() == "wfo":
+        opt = result_data.get("wfo_opt_days")
+        live = result_data.get("wfo_live_days")
+        if opt not in (None, "") and live not in (None, ""):
+            return f"opt{int(float(opt))}_live{int(float(live))}"
+    return "backtest"
+
+
+def _result_period_token(result_data: dict) -> str:
+    start = _compact_date_token(result_data.get("data_start"), "start")
+    end = _compact_date_token(result_data.get("data_end"), "end")
+    return f"{start}_{end}"
+
+
+def _result_filename(result_data: dict, purpose: str, ext: str, stamp: str | None = None) -> str:
+    mode = _safe_slug(str(result_data.get("mode", "run")).lower())
+    symbol = _safe_slug(str(result_data.get("symbol", "asset")).upper())
+    tf = _safe_slug(str(result_data.get("tf", "tf")).lower())
+    period = _result_period_token(result_data)
+    window = _result_window_token(result_data)
+    stamp = stamp or pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
+    return f"bee4_{mode}_{symbol}_{tf}_{period}_{window}_{_safe_slug(purpose)}_{stamp}.{ext}"
+
+
+def _result_metadata_rows(result_data: dict) -> list[tuple[str, str]]:
+    mode = str(result_data.get("mode", "n/d")).upper()
+    requested_start = result_data.get("requested_start_label") or result_data.get("requested_start") or "n/d"
+    requested_end = result_data.get("requested_end_label") or result_data.get("requested_end") or "n/d"
+    rows = [
+        ("project", "BEE4_4"),
+        ("mode", mode),
+        ("symbol", str(result_data.get("symbol", "n/d")).upper()),
+        ("timeframe", str(result_data.get("tf", "n/d"))),
+        ("requested_period", f"{requested_start} -> {requested_end}"),
+        (
+            "data_period",
+            f"{_display_dt(result_data.get('data_start'))} -> {_display_dt(result_data.get('data_end'))}",
+        ),
+        ("data_rows", str(result_data.get("data_rows", "n/d"))),
+    ]
+    if str(result_data.get("mode", "")).lower() == "wfo":
+        rows.extend(
+            [
+                (
+                    "wfo_opt_live",
+                    f"OPT {result_data.get('wfo_opt_days', 'n/d')} dni / LIVE {result_data.get('wfo_live_days', 'n/d')} dni",
+                ),
+                ("wfo_bars", f"OPT {result_data.get('wfo_opt_bars', 'n/d')} / LIVE {result_data.get('wfo_live_bars', 'n/d')}"),
+                ("wfo_expected_windows", str(result_data.get("wfo_expected_windows", "n/d"))),
+            ]
+        )
+    return rows
+
+
+def _metadata_comment_block(result_data: dict, prefix="# ") -> str:
+    lines = [f"{prefix}BEE4_4 export metadata"]
+    lines.extend(f"{prefix}{key}: {value}" for key, value in _result_metadata_rows(result_data))
+    return "\n".join(lines) + "\n"
+
+
 def _saved_result_filename(result_data: dict) -> str:
     stats = result_data.get("stats", {}) if isinstance(result_data, dict) else {}
-    mode = _safe_slug(str(result_data.get("mode", "run")).lower() if isinstance(result_data, dict) else "run")
-    symbol = _safe_slug(str(result_data.get("symbol", "asset")).upper() if isinstance(result_data, dict) else "asset")
-    tf = _safe_slug(str(result_data.get("tf", "tf")).lower() if isinstance(result_data, dict) else "tf")
     ret = float(stats.get("net_return_pct", 0.0) or 0.0)
     ret_token = ("p" if ret >= 0 else "m") + f"{abs(ret):.2f}".replace(".", "p")
     n_trades = int(float(stats.get("n_trades", len(result_data.get("trades", []))) or 0))
     stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-    return f"bee4_{stamp}_{mode}_{symbol}_{tf}_{ret_token}pct_tr{n_trades}.json"
+    stem = _result_filename(result_data, f"{ret_token}pct_tr{n_trades}", "json", stamp=stamp)
+    return stem
 
 
 def _saved_result_path(filename: str) -> Path:
@@ -214,6 +292,7 @@ def _save_result_file(result_data: dict) -> str:
             "symbol": result_data.get("symbol"),
             "tf": result_data.get("tf"),
             "capital": result_data.get("capital"),
+            "run_metadata": dict(_result_metadata_rows(result_data)),
             "stats": _json_safe(result_data.get("stats", {})),
         },
         "result": _json_safe(result_data),
@@ -848,11 +927,7 @@ def fig_report_price_wt(result_data: dict) -> go.Figure:
 
 
 def _report_filename(result_data: dict) -> str:
-    mode = _safe_slug(str(result_data.get("mode", "run")).lower())
-    symbol = _safe_slug(str(result_data.get("symbol", "asset")).upper())
-    tf = _safe_slug(str(result_data.get("tf", "tf")).lower())
-    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-    return f"bee4_{mode}_{symbol}_{tf}_report_{stamp}.pdf"
+    return _result_filename(result_data, "report", "pdf")
 
 
 def _report_value(value, decimals: int = 2) -> str:
@@ -880,6 +955,17 @@ def _report_summary_rows(result_data: dict) -> list[list[str]]:
     return [
         ["Tryb", str(result_data.get("mode", "n/d")).upper()],
         ["Symbol / TF", f"{str(result_data.get('symbol', '')).upper()} {result_data.get('tf', '')}"],
+        ["Okres zadany", f"{result_data.get('requested_start_label', 'n/d')} -> {result_data.get('requested_end_label', 'n/d')}"],
+        ["Okres danych", f"{_display_dt(result_data.get('data_start'))} -> {_display_dt(result_data.get('data_end'))}"],
+        ["Liczba swiec", str(result_data.get("data_rows", "n/d"))],
+        [
+            "OPT / LIVE",
+            (
+                f"OPT {result_data.get('wfo_opt_days')} dni / LIVE {result_data.get('wfo_live_days')} dni"
+                if str(result_data.get("mode", "")).lower() == "wfo"
+                else "Backtest manualny"
+            ),
+        ],
         ["Kapital startowy", _money(capital)],
         ["Kapital koncowy", _money(stats.get("final_capital", capital))],
         ["Net zwrot", f"{float(stats.get('net_return_pct', 0.0) or 0.0):+.2f}%"],
@@ -1399,8 +1485,10 @@ def _build_pine_trades_overlay(result_data: dict) -> str:
     n_events = len(add_lines)
     n_trades = len(result_data.get("trades", []) or [])
     events_block = "\n".join(add_lines) if add_lines else "    // No trades available"
+    metadata = _metadata_comment_block(result_data, prefix="// ").rstrip()
 
     return f"""//@version=5
+{metadata}
 indicator("BEE4 Trades Overlay with Trade Numbers", overlay=true, max_labels_count=500)
 
 // Generated by BEE4 dashboard: {generated}
@@ -2448,13 +2536,13 @@ def sidebar():
                 ),
             ], style={"display":"none"}),
             html.Div([
-                html.Div([field("Long open level H1", inp("inp-bt-long-zone", DEFAULT_PARAMS["wt_long_entry_max_above_zero"], type="number", step=1))], style={"flex":"1"}),
-                html.Div([field("Long close level H1", inp("inp-bt-long-close-level", DEFAULT_PARAMS["wt_long_close_min_level"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long open level H1", inp("inp-bt-long-zone", BT_DEFAULT_LONG_OPEN_H1, type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long close level H1", inp("inp-bt-long-close-level", BT_DEFAULT_LONG_CLOSE_H1, type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short zone H1", inp("inp-bt-short-zone", DEFAULT_PARAMS["wt_short_entry_min_below_zero"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
-                html.Div([field("Long open level H4", inp("inp-bt-h4-long", DEFAULT_PARAMS["wt_h4_long_filter_max"], type="number", step=1))], style={"flex":"1"}),
-                html.Div([field("Long close level H4", inp("inp-bt-h4-long-close", DEFAULT_PARAMS["wt_h4_long_close_min"], type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long open level H4", inp("inp-bt-h4-long", BT_DEFAULT_LONG_OPEN_H4, type="number", step=1))], style={"flex":"1"}),
+                html.Div([field("Long close level H4", inp("inp-bt-h4-long-close", BT_DEFAULT_LONG_CLOSE_H4, type="number", step=1))], style={"flex":"1"}),
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
@@ -2492,8 +2580,8 @@ def sidebar():
         html.Div([
             sec("Konfiguracja WFO"),
             html.Div([
-                html.Div([field("Opt (dni)", inp("inp-opt", OPT_DAYS,  type="number",min=14,max=365,step=7))],style={"flex":"1"}),
-                html.Div([field("Live (dni)",inp("inp-live",LIVE_DAYS, type="number",min=7, max=90, step=7))],style={"flex":"1"}),
+                html.Div([field("Opt (dni)", inp("inp-opt", OPT_DAYS,  type="number",min=7,max=365,step=1, debounce=False))],style={"flex":"1"}),
+                html.Div([field("Live (dni)",inp("inp-live",LIVE_DAYS, type="number",min=1, max=90, step=1, debounce=False))],style={"flex":"1"}),
             ],style={"display":"flex","gap":"8px"}),
             field("Scoring", drp("inp-score",[
                 {"label":"Balanced",    "value":"balanced"},
@@ -2974,6 +3062,23 @@ def _worker(
             f"{data_start.strftime('%Y-%m-%d %H:%M')} → "
             f"{data_end.strftime('%Y-%m-%d %H:%M')} UTC  |  {len(df)} świec"
         )
+        requested_start_label = (
+            t_start.strftime("%Y-%m-%d") if t_start is not None else "początek danych"
+        )
+        requested_end_label = (
+            t_end.strftime("%Y-%m-%d") if t_end is not None else "dziś / ostatnia świeca"
+        )
+        requested_period_text = f"{requested_start_label} → {requested_end_label}"
+        common_result_meta = {
+            "requested_start": t_start.isoformat() if t_start is not None else None,
+            "requested_end": t_end.isoformat() if t_end is not None else None,
+            "requested_start_label": requested_start_label,
+            "requested_end_label": requested_end_label,
+            "requested_period": requested_period_text,
+            "data_start": data_start.isoformat(),
+            "data_end": data_end.isoformat(),
+            "data_rows": len(df),
+        }
 
         fee_rate_val = float(fee if fee is not None and fee != "" else FEE_RATE * 100) / 100.0
         slip_bps_val = float(slip if slip is not None and slip != "" else DEFAULT_PARAMS.get("slippage_bps", 0.0))
@@ -3004,7 +3109,7 @@ def _worker(
             bt_started_at = _time.time()
             ss(
                 status="Backtest w toku...",
-                progress=f"Dane: {data_range_text}  |  czas 0s  |  ETA liczę...",
+                progress=f"BACKTEST  |  okres {requested_period_text}  |  Dane: {data_range_text}  |  czas 0s  |  ETA liczę...",
             )
             strat = Bee4Strategy(strategy_params, fee_rate=fee_rate_val)
             trades_bt, equity_bt, _ = strat.run(df, capital)
@@ -3020,9 +3125,7 @@ def _worker(
                 "capital": capital,
                 "tf": tf,
                 "symbol": symbol,
-                "data_start": data_start.isoformat(),
-                "data_end": data_end.isoformat(),
-                "data_rows": len(df),
+                **common_result_meta,
                 "params_used": strategy_params,
                 "trades": trades_bt.to_dict("records") if not trades_bt.empty else [],
                 "equity": equity_bt.to_dict("records") if equity_bt is not None and not equity_bt.empty else [],
@@ -3068,6 +3171,15 @@ def _worker(
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
         total  = max(0, (len(df)-ob)//lb)
         combo_total = _grid_combo_count(grid_overrides)
+        wfo_window_text = f"OPT {opt_days_val} dni / LIVE {live_days_val} dni"
+        wfo_result_meta = {
+            **common_result_meta,
+            "wfo_opt_days": opt_days_val,
+            "wfo_live_days": live_days_val,
+            "wfo_opt_bars": ob,
+            "wfo_live_bars": lb,
+            "wfo_expected_windows": total,
+        }
         wfo_started_at = _time.time()
         progress_total_windows = max(total, 1)
         progress_combo_total = max(combo_total, 1)
@@ -3083,7 +3195,7 @@ def _worker(
             window_pct = combo_idx / combo_count * 100.0
             total_pct = done_units / total_progress_units * 100.0
             return (
-                f"Dane: {data_range_text}  |  "
+                f"WFO {wfo_window_text}  |  okres {requested_period_text}  |  Dane: {data_range_text}  |  "
                 f"Okno {window_idx + 1} / {total_windows}  |  "
                 f"kombinacja {combo_idx} / {combo_count}  |  "
                 f"{window_pct:.0f}% okna  |  całość {total_pct:.1f}%  |  "
@@ -3091,7 +3203,7 @@ def _worker(
             )
 
         ss(
-            status=f"WFO w toku  |  ~{total} okien  |  {combo_total} kombinacji/okno",
+            status=f"WFO w toku  |  {wfo_window_text}  |  ~{total} okien  |  {combo_total} kombinacji/okno",
             progress=_wfo_progress_text(0, progress_total_windows, 0, progress_combo_total),
         )
 
@@ -3114,9 +3226,7 @@ def _worker(
                 qb     = breakdown_by_period(all_tr, "QE") if not all_tr.empty else pd.DataFrame()
                 r = {
                     "mode":"wfo","stats":st,"capital":capital,"tf":tf,"symbol":symbol,
-                    "data_start": data_start.isoformat(),
-                    "data_end": data_end.isoformat(),
-                    "data_rows": len(df),
+                    **wfo_result_meta,
                     "trades"    : all_tr.to_dict("records") if not all_tr.empty else [],
                     "equity"    : equity_sofar.to_dict("records")
                                   if equity_sofar is not None and not equity_sofar.empty else [],
@@ -3166,9 +3276,7 @@ def _worker(
 
         result = {
             "mode":"wfo","stats":stats,"capital":capital,"tf":tf,"symbol":symbol,
-            "data_start": data_start.isoformat(),
-            "data_end": data_end.isoformat(),
-            "data_rows": len(df),
+            **wfo_result_meta,
             "params_used": strategy_params,
             "trades"    : all_trades.to_dict("records")  if all_trades is not None and not all_trades.empty else [],
             "equity"    : equity_wfo.to_dict("records")  if equity_wfo is not None and not equity_wfo.empty else [],
@@ -3293,9 +3401,10 @@ def export_trades(n_clicks, result_data):
     mode = str(result_data.get("mode", "run")).lower()
     symbol = str(result_data.get("symbol", "asset")).upper()
     tf = str(result_data.get("tf", "tf")).lower()
-    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"bee4_{mode}_{symbol}_{tf}_trades_{stamp}.csv"
-    return dcc.send_data_frame(export_df.to_csv, filename, index=False, encoding="utf-8-sig")
+    filename = _result_filename({**result_data, "mode": mode, "symbol": symbol, "tf": tf}, "trades", "csv")
+    csv_body = export_df.to_csv(index=False)
+    content = "\ufeff" + _metadata_comment_block(result_data, prefix="# ") + csv_body
+    return dcc.send_string(content, filename)
 
 
 @app.callback(
@@ -3312,11 +3421,7 @@ def export_trades_pine(n_clicks, result_data):
     if not script.strip():
         return dash.no_update
 
-    mode = str(result_data.get("mode", "run")).lower()
-    symbol = str(result_data.get("symbol", "asset")).upper()
-    tf = str(result_data.get("tf", "tf")).lower()
-    stamp = pd.Timestamp.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename = f"bee4_{mode}_{symbol}_{tf}_trades_overlay_{stamp}.pine"
+    filename = _result_filename(result_data, "trades_overlay", "pine")
     return dcc.send_string(script, filename)
 
 
