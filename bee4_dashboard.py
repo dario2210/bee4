@@ -2968,6 +2968,13 @@ def _worker(
             )
             return
 
+        data_start = pd.to_datetime(df["time"].iloc[0], utc=True)
+        data_end = pd.to_datetime(df["time"].iloc[-1], utc=True)
+        data_range_text = (
+            f"{data_start.strftime('%Y-%m-%d %H:%M')} → "
+            f"{data_end.strftime('%Y-%m-%d %H:%M')} UTC  |  {len(df)} świec"
+        )
+
         fee_rate_val = float(fee if fee is not None and fee != "" else FEE_RATE * 100) / 100.0
         slip_bps_val = float(slip if slip is not None and slip != "" else DEFAULT_PARAMS.get("slippage_bps", 0.0))
         run_mode = str(run_mode or "wfo").lower()
@@ -2997,7 +3004,7 @@ def _worker(
             bt_started_at = _time.time()
             ss(
                 status="Backtest w toku...",
-                progress=f"Przetwarzam {len(df)} świec  |  czas 0s  |  ETA liczę...",
+                progress=f"Dane: {data_range_text}  |  czas 0s  |  ETA liczę...",
             )
             strat = Bee4Strategy(strategy_params, fee_rate=fee_rate_val)
             trades_bt, equity_bt, _ = strat.run(df, capital)
@@ -3013,6 +3020,9 @@ def _worker(
                 "capital": capital,
                 "tf": tf,
                 "symbol": symbol,
+                "data_start": data_start.isoformat(),
+                "data_end": data_end.isoformat(),
+                "data_rows": len(df),
                 "params_used": strategy_params,
                 "trades": trades_bt.to_dict("records") if not trades_bt.empty else [],
                 "equity": equity_bt.to_dict("records") if equity_bt is not None and not equity_bt.empty else [],
@@ -3073,6 +3083,7 @@ def _worker(
             window_pct = combo_idx / combo_count * 100.0
             total_pct = done_units / total_progress_units * 100.0
             return (
+                f"Dane: {data_range_text}  |  "
                 f"Okno {window_idx + 1} / {total_windows}  |  "
                 f"kombinacja {combo_idx} / {combo_count}  |  "
                 f"{window_pct:.0f}% okna  |  całość {total_pct:.1f}%  |  "
@@ -3103,6 +3114,9 @@ def _worker(
                 qb     = breakdown_by_period(all_tr, "QE") if not all_tr.empty else pd.DataFrame()
                 r = {
                     "mode":"wfo","stats":st,"capital":capital,"tf":tf,"symbol":symbol,
+                    "data_start": data_start.isoformat(),
+                    "data_end": data_end.isoformat(),
+                    "data_rows": len(df),
                     "trades"    : all_tr.to_dict("records") if not all_tr.empty else [],
                     "equity"    : equity_sofar.to_dict("records")
                                   if equity_sofar is not None and not equity_sofar.empty else [],
@@ -3152,6 +3166,9 @@ def _worker(
 
         result = {
             "mode":"wfo","stats":stats,"capital":capital,"tf":tf,"symbol":symbol,
+            "data_start": data_start.isoformat(),
+            "data_end": data_end.isoformat(),
+            "data_rows": len(df),
             "params_used": strategy_params,
             "trades"    : all_trades.to_dict("records")  if all_trades is not None and not all_trades.empty else [],
             "equity"    : equity_wfo.to_dict("records")  if equity_wfo is not None and not equity_wfo.empty else [],
