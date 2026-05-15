@@ -191,6 +191,9 @@ def walk_forward_optimization(
     start = 0
     window_id = 0
     current_capital = float(initial_capital)
+    carry_position = None
+    carry_capital_at_open = None
+    next_live_trade_id = 1
 
     all_live_trades: list[pd.DataFrame] = []
     global_equity: Optional[pd.DataFrame] = None
@@ -231,7 +234,10 @@ def walk_forward_optimization(
             break
 
         opt_slice = df.iloc[start : start + opt_bars]
-        live_slice = df.iloc[start + opt_bars : start + opt_bars + live_bars]
+        live_start_idx = start + opt_bars
+        live_end_idx = live_start_idx + live_bars
+        live_slice = df.iloc[live_start_idx:live_end_idx]
+        live_previous_row = df.iloc[live_start_idx - 1] if live_start_idx > 0 else None
 
         selection_keys = [
             "trade_direction",
@@ -393,7 +399,23 @@ def walk_forward_optimization(
             opt_max_dd = dd_arr.min() * 100.0
 
         strat = Bee4Strategy(best_params, fee_rate=fee_rate)
-        trades_live, equity_live, final_cap_live = strat.run(live_slice, current_capital)
+        (
+            trades_live,
+            equity_live,
+            final_cap_live,
+            carry_position,
+            carry_capital_at_open,
+            next_live_trade_id,
+        ) = strat.run(
+            live_slice,
+            current_capital,
+            initial_position=carry_position,
+            initial_capital_at_open=carry_capital_at_open,
+            initial_next_trade_id=next_live_trade_id,
+            previous_row=live_previous_row,
+            keep_open_position=True,
+            return_state=True,
+        )
 
         if not trades_live.empty:
             trades_live = trades_live.copy()
@@ -479,6 +501,8 @@ def walk_forward_optimization(
                 "live_return_pct": live_ret_pct,
                 "live_final_cap": final_cap_live,
                 "n_trades_live": n_trades_live,
+                "open_position_carried": carry_position is not None,
+                "open_position_trade_id": int(carry_position.trade_id) if carry_position is not None else 0,
                 "selection_method": "top_decile_median",
                 "selection_top_n": robust_pick["top_n"],
             }

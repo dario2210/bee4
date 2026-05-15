@@ -208,22 +208,45 @@ class Bee4Strategy:
             self.position = None
         return rec, new_capital
 
-    def run(self, df, initial_capital):
+    def run(
+        self,
+        df,
+        initial_capital,
+        *,
+        initial_position: Optional[PositionState] = None,
+        initial_capital_at_open: Optional[float] = None,
+        initial_next_trade_id: int = 1,
+        previous_row: Optional[pd.Series] = None,
+        keep_open_position: bool = False,
+        return_state: bool = False,
+    ):
         capital = initial_capital
-        capital_at_open = initial_capital
+        capital_at_open = (
+            float(initial_capital_at_open)
+            if initial_capital_at_open is not None
+            else float(initial_capital)
+        )
         trades = []
         equity_curve = []
-        self.position = None
-        self.next_trade_id = 1
+        self.position = initial_position
+        self.next_trade_id = int(initial_next_trade_id or 1)
+        if self.position is not None and int(self.position.trade_id or 0) >= self.next_trade_id:
+            self.next_trade_id = int(self.position.trade_id) + 1
 
         if len(df) == 0:
-            return pd.DataFrame(), pd.DataFrame(columns=["time", "equity"]), capital
+            equity_df = pd.DataFrame(columns=["time", "equity"])
+            if return_state:
+                open_capital_at_open = capital_at_open if self.position is not None else None
+                return pd.DataFrame(), equity_df, capital, self.position, open_capital_at_open, self.next_trade_id
+            return pd.DataFrame(), equity_df, capital
 
         equity_curve.append((df["time"].iloc[0], capital))
 
-        for i in range(1, len(df)):
+        start_idx = 0 if previous_row is not None else 1
+        for i in range(start_idx, len(df)):
             bar = bar_from_row(df.iloc[i], self.params)
-            prev = bar_from_row(df.iloc[i - 1], self.params)
+            prev_source = previous_row if i == 0 else df.iloc[i - 1]
+            prev = bar_from_row(prev_source, self.params)
 
             if any(np.isnan(v) for v in [bar.wt1, bar.wt2, prev.wt1, prev.wt2]):
                 continue
@@ -290,7 +313,8 @@ class Bee4Strategy:
             last_time = df["time"].iloc[-1]
             if not equity_curve or equity_curve[-1][0] != last_time:
                 equity_curve.append((last_time, capital))
-            self.position = None
+            if not keep_open_position:
+                self.position = None
 
         cols = [
             "side",
@@ -348,5 +372,8 @@ class Bee4Strategy:
 
         equity_df = pd.DataFrame(equity_curve, columns=["time", "equity"])
         equity_df = equity_df.dropna(subset=["time"]).reset_index(drop=True)
+        if return_state:
+            open_capital_at_open = capital_at_open if self.position is not None else None
+            return trades_df, equity_df, capital, self.position, open_capital_at_open, self.next_trade_id
         return trades_df, equity_df, capital
 

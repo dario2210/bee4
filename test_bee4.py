@@ -1081,6 +1081,61 @@ class TestBacktestAccounting:
         assert final_cap == pytest.approx(9_000.0)
         assert equity.iloc[-1]["time"] == df.iloc[-1]["time"]
 
+    def test_open_position_can_continue_with_new_window_params(self):
+        df = _signal_df()
+        first_window = df.iloc[:2].copy()
+        next_window = df.iloc[2:3].copy()
+        next_window.loc[next_window.index[0], "high"] = 1820.0
+
+        params_entry_window = dict(
+            LONG_ONLY_PARAMS,
+            fee_rate=0.0,
+            slippage_bps=0.0,
+            spread_bps=0.0,
+            wt_long_tp1_pct=0.01,
+            wt_long_tp2_enabled=False,
+            wt_long_close_min_level=999.0,
+            wt_h4_long_close_min=999.0,
+            wt_long_emergency_sl_enabled=False,
+        )
+        strat_entry = Bee4Strategy(params_entry_window, fee_rate=0.0)
+
+        trades1, _equity1, cap1, position, cap_at_open, next_trade_id = strat_entry.run(
+            first_window,
+            9_000.0,
+            keep_open_position=True,
+            return_state=True,
+        )
+
+        assert trades1.empty
+        assert position is not None
+        assert position.trade_id == 1
+        assert cap_at_open == pytest.approx(9_000.0)
+        assert next_trade_id == 2
+
+        params_next_window = dict(params_entry_window, wt_long_tp1_pct=0.005)
+        strat_next = Bee4Strategy(params_next_window, fee_rate=0.0)
+
+        trades2, _equity2, cap2, position2, cap_at_open2, next_trade_id2 = strat_next.run(
+            next_window,
+            cap1,
+            initial_position=position,
+            initial_capital_at_open=cap_at_open,
+            initial_next_trade_id=next_trade_id,
+            previous_row=first_window.iloc[-1],
+            keep_open_position=True,
+            return_state=True,
+        )
+
+        assert len(trades2) == 1
+        assert trades2.iloc[0]["reason"] == "LONG_TP1_PARTIAL"
+        assert trades2.iloc[0]["logical_trade_no"] == 1
+        assert trades2.iloc[0]["exit_price"] == pytest.approx(1810.0 * 1.005)
+        assert position2 is not None
+        assert cap_at_open2 == pytest.approx(9_000.0)
+        assert next_trade_id2 == 2
+        assert cap2 > cap1
+
 
 class TestWFOHelpers:
     def test_wfo_bars_1h(self):
@@ -1243,6 +1298,99 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
         assert set(windows_df["best_wt_long_emergency_sl_capital_pct"]) == {0.05}
         assert set(windows_df["best_wt_long_emergency_sl_enabled"]) == {True}
+
+    def test_wfo_carries_open_position_to_next_live_window(self):
+        times = pd.date_range("2024-01-01", periods=72, freq="1h", tz="UTC")
+        close = np.full(len(times), 100.0)
+        high = close + 0.2
+        low = close - 0.2
+
+        wt1 = np.full(len(times), -60.0)
+        wt2 = np.full(len(times), -60.0)
+        wt1[46], wt2[46] = -50.0, -40.0
+        wt1[47], wt2[47] = -40.0, -50.0
+        wt1[48], wt2[48] = -35.0, -45.0
+        close[48] = 101.1
+        high[48] = 101.2
+        low[48] = 100.9
+
+        df = pd.DataFrame(
+            {
+                "time": times,
+                "open": close,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 1000.0,
+                "wt1": wt1,
+                "wt2": wt2,
+                "h4_wt1": np.full(len(times), -50.0),
+                "h4_wt2": np.full(len(times), -60.0),
+                "h4_prev_wt1": np.full(len(times), -60.0),
+                "h4_prev_wt2": np.full(len(times), -50.0),
+                "ema20": close,
+                "ema_20": close,
+                "htf_ema200": close,
+                "atr": np.full(len(times), 10.0),
+                "wt_green_dot": [False] * len(times),
+                "wt_red_dot": [False] * len(times),
+                "bars_since_wt_green_dot": [np.nan] * len(times),
+                "bars_since_wt_red_dot": [np.nan] * len(times),
+            }
+        )
+        df["wt_green_dot"] = (df["wt1"].shift(1) <= df["wt2"].shift(1)) & (df["wt1"] > df["wt2"])
+        df["bars_since_wt_green_dot"] = np.where(df["wt_green_dot"], 0.0, np.nan)
+        df["h4_wt_delta"] = df["h4_wt1"] - df["h4_wt2"]
+        df["h4_prev_wt_delta"] = df["h4_prev_wt1"] - df["h4_prev_wt2"]
+
+        grid_overrides = {
+            "wt_channel_len": [10],
+            "wt_avg_len": [21],
+            "wt_signal_len": [3],
+            "wt_min_signal_level": [0.0],
+            "wt_reentry_window_bars": [0],
+            "wt_use_ema_filter": [False],
+            "wt_use_htf_filter": [False],
+            "wt_ema_filter_len": [20],
+            "wt_long_entry_max_above_zero": [-30.0],
+            "wt_long_close_min_level": [999.0],
+            "wt_short_entry_min_below_zero": [30.0],
+            "wt_h4_long_filter_max": [-20.0],
+            "wt_h4_long_close_min": [999.0],
+            "wt_h4_short_filter_min": [50.0],
+            "wt_long_emergency_sl_capital_pct": [0.0],
+        }
+
+        trades, _equity, windows_df, final_cap, stopped = walk_forward_optimization(
+            df,
+            interval="1h",
+            verbose=False,
+            fee_rate=0.0,
+            opt_days=1,
+            live_days=1,
+            initial_capital=10_000.0,
+            base_params=dict(
+                BASE_PARAMS,
+                fee_rate=0.0,
+                slippage_bps=0.0,
+                spread_bps=0.0,
+                wt_long_tp1_fraction=1.0,
+                wt_long_tp2_enabled=False,
+                wt_long_emergency_sl_enabled=False,
+            ),
+            grid_overrides=grid_overrides,
+        )
+
+        assert stopped is False
+        assert len(windows_df) == 2
+        assert bool(windows_df.iloc[0]["open_position_carried"]) is True
+        assert bool(windows_df.iloc[1]["open_position_carried"]) is False
+        assert len(trades) == 1
+        assert trades.iloc[0]["entry_time"] == times[47]
+        assert trades.iloc[0]["exit_time"] == times[48]
+        assert trades.iloc[0]["window_id"] == 1
+        assert trades.iloc[0]["trade_event"] == "TP1"
+        assert final_cap > 10_000.0
 
     def test_wfo_can_stop_during_first_window(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
