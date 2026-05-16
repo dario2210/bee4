@@ -29,6 +29,10 @@ from bee4_params import (
     WT_H4_LONG_CLOSE_MIN_GRID, WT_H4_LONG_CLOSE_MIN_OPTIONS,
     WT_H4_SHORT_FILTER_MIN_GRID, WT_H4_SHORT_FILTER_MIN_OPTIONS,
     WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS,
+    WT_LONG_TP1_FRACTION_GRID, WT_LONG_TP1_FRACTION_OPTIONS,
+    WT_LONG_TP1_PCT_GRID, WT_LONG_TP1_PCT_OPTIONS,
+    WT_LONG_TP2_FRACTION_GRID, WT_LONG_TP2_FRACTION_OPTIONS,
+    WT_LONG_TP2_PCT_GRID, WT_LONG_TP2_PCT_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -379,6 +383,9 @@ def _strategy_params_from_controls(
     long_close_level,
     h4_long_close_level,
     long_tp1_pct,
+    long_tp2_pct,
+    long_tp1_fraction,
+    long_tp2_fraction,
     long_sl_pct,
     fee_rate: float,
     slippage_bps: float,
@@ -388,6 +395,16 @@ def _strategy_params_from_controls(
     emergency_sl_pct = _pct_value(
         long_sl_pct,
         float(DEFAULT_PARAMS.get("wt_long_emergency_sl_capital_pct", 0.0)),
+    )
+    tp1_pct = _pct_value(long_tp1_pct, float(DEFAULT_PARAMS.get("wt_long_tp1_pct", 0.01)))
+    tp2_pct = _pct_value(long_tp2_pct, float(DEFAULT_PARAMS.get("wt_long_tp2_pct", 0.02)))
+    tp1_fraction = _pct_value(
+        long_tp1_fraction,
+        float(DEFAULT_PARAMS.get("wt_long_tp1_fraction", 1.0 / 3.0)),
+    )
+    tp2_fraction = _pct_value(
+        long_tp2_fraction,
+        float(DEFAULT_PARAMS.get("wt_long_tp2_fraction", 1.0 / 3.0)),
     )
     params.update(
         {
@@ -441,14 +458,12 @@ def _strategy_params_from_controls(
             "wt_h4_short_filter_min": float(
                 h4_short_filter if h4_short_filter not in (None, "") else DEFAULT_PARAMS["wt_h4_short_filter_min"]
             ),
-            "wt_long_tp1_enabled": True,
-            "wt_long_tp1_pct": float(
-                (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_long_tp1_pct", 0.01) * 100.0)
-            ) / 100.0,
-            "wt_long_tp1_fraction": float(DEFAULT_PARAMS.get("wt_long_tp1_fraction", 1.0 / 3.0)),
-            "wt_long_tp2_enabled": True,
-            "wt_long_tp2_pct": float(DEFAULT_PARAMS.get("wt_long_tp2_pct", 0.02)),
-            "wt_long_tp2_fraction": float(DEFAULT_PARAMS.get("wt_long_tp2_fraction", 1.0 / 3.0)),
+            "wt_long_tp1_enabled": tp1_pct > 0.0 and tp1_fraction > 0.0,
+            "wt_long_tp1_pct": tp1_pct,
+            "wt_long_tp1_fraction": tp1_fraction,
+            "wt_long_tp2_enabled": tp2_pct > 0.0 and tp2_fraction > 0.0,
+            "wt_long_tp2_pct": tp2_pct,
+            "wt_long_tp2_fraction": tp2_fraction,
             "wt_long_emergency_sl_enabled": emergency_sl_pct > 0.0,
             "wt_long_emergency_sl_capital_pct": emergency_sl_pct,
             "wt_short_tp1_enabled": True,
@@ -484,6 +499,10 @@ def _grid_overrides_from_controls(
     long_close_level_grid,
     h4_long_close_level_grid,
     long_sl_pct_grid,
+    long_tp1_pct_grid,
+    long_tp2_pct_grid,
+    long_tp1_fraction_grid,
+    long_tp2_fraction_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -518,6 +537,26 @@ def _grid_overrides_from_controls(
         "wt_long_emergency_sl_capital_pct": _clean_selected_values(
             long_sl_pct_grid,
             WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
+            float,
+        ),
+        "wt_long_tp1_pct": _clean_selected_values(
+            long_tp1_pct_grid,
+            WT_LONG_TP1_PCT_GRID,
+            float,
+        ),
+        "wt_long_tp2_pct": _clean_selected_values(
+            long_tp2_pct_grid,
+            WT_LONG_TP2_PCT_GRID,
+            float,
+        ),
+        "wt_long_tp1_fraction": _clean_selected_values(
+            long_tp1_fraction_grid,
+            WT_LONG_TP1_FRACTION_GRID,
+            float,
+        ),
+        "wt_long_tp2_fraction": _clean_selected_values(
+            long_tp2_fraction_grid,
+            WT_LONG_TP2_FRACTION_GRID,
             float,
         ),
         "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
@@ -568,7 +607,7 @@ def _format_param_value(value, key: str | None = None):
     if isinstance(value, bool):
         return "On" if value else "Off"
     if isinstance(value, float):
-        if key and key.endswith("_pct"):
+        if key and (key.endswith("_pct") or key.endswith("_fraction")):
             return f"{value * 100.0:.2f}%"
         return round(value, 4)
     return value
@@ -695,6 +734,10 @@ def fig_pdist(wd):
         ("best_wt_long_close_min_level", "Long close level H1", C["amber"]),
         ("best_wt_h4_long_filter_max", "Long open level H4", C["purple"]),
         ("best_wt_h4_long_close_min", "Long close level H4", C["blue"]),
+        ("best_wt_long_tp1_pct", "TP1 % long", C["green"]),
+        ("best_wt_long_tp2_pct", "TP2 % long", C["amber"]),
+        ("best_wt_long_tp1_fraction", "TP1 close %", C["purple"]),
+        ("best_wt_long_tp2_fraction", "TP2 close %", C["blue"]),
     ]
     rows = max(1, (len(specs) + 1) // 2)
     fig = make_subplots(
@@ -710,7 +753,10 @@ def fig_pdist(wd):
         row = idx // 2 + 1
         col_idx = idx % 2 + 1
         vc = wd[col].value_counts().sort_index()
-        labels = ["on" if v is True else "off" if v is False else str(v) for v in vc.index]
+        labels = [
+            "on" if v is True else "off" if v is False else f"{float(v) * 100:.1f}%" if ("pct" in col or "fraction" in col) else str(v)
+            for v in vc.index
+        ]
         fig.add_trace(
             go.Bar(x=labels, y=vc.values, marker_color=clr, showlegend=False),
             row=row,
@@ -2547,6 +2593,7 @@ def sidebar():
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
+                html.Div([field("TP2 % long", inp("inp-bt-long-tp2-pct", round(DEFAULT_PARAMS["wt_long_tp2_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
                 html.Div([field("Stop loss", drp(
                     "inp-bt-long-sl-pct",
                     [{"label": "Wyłączony", "value": 0.0}] + [
@@ -2556,6 +2603,10 @@ def sidebar():
                     ],
                     DEFAULT_PARAMS["wt_long_emergency_sl_capital_pct"],
                 ))], style={"flex":"1"}),
+            ], style={"display":"flex","gap":"8px"}),
+            html.Div([
+                html.Div([field("TP1 close %", inp("inp-bt-long-tp1-frac", round(DEFAULT_PARAMS["wt_long_tp1_fraction"] * 100.0, 2), type="number", min=0, max=100, step=1))], style={"flex":"1"}),
+                html.Div([field("TP2 close %", inp("inp-bt-long-tp2-frac", round(DEFAULT_PARAMS["wt_long_tp2_fraction"] * 100.0, 2), type="number", min=0, max=100, step=1))], style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Entry window H1", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
@@ -2572,7 +2623,7 @@ def sidebar():
                 html.Div([field("EMA length", inp("inp-bt-ema-len", DEFAULT_PARAMS["wt_ema_filter_len"], type="number", min=2, max=200, step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div(
-                "BEE4_4: short jest wyłączony. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1 zamyka 1/3 longa przy +1%, a jeżeli przed TP2 cena wróci do wejścia, reszta wychodzi na break-even. Stop loss może być wyłączony albo ustawiony na 1/2/5/10%.",
+                "BEE4_4: short jest wyłączony. Entry window H1 pozwala wejść kilka świec po zielonej kropce. Open level działa jako poziom lub niżej, close level jako poziom lub wyżej. TP1/TP2 oraz zamykane części można testować w WFO. Po TP1/TP2 powrót ceny do wejścia zamyka resztę na break-even.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"4px"},
             ),
         ],style=card_s),
@@ -2585,6 +2636,7 @@ def sidebar():
             ],style={"display":"flex","gap":"8px"}),
             field("Scoring", drp("inp-score",[
                 {"label":"Balanced",    "value":"balanced"},
+                {"label":"Growth",      "value":"growth"},
                 {"label":"Return only", "value":"return_only"},
                 {"label":"Defensive",   "value":"defensive"},
             ],"balanced")),
@@ -2633,6 +2685,32 @@ def sidebar():
                         for v in WT_LONG_EMERGENCY_SL_CAPITAL_PCT_OPTIONS
                     ],
                     value=WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+            ]),
+            html.Div([
+                sec("TP1 % long"),
+                dcc.Checklist(id="chk-grid-long-tp1-pct",
+                    options=[{"label": f" {v * 100:.1f}%", "value": v} for v in WT_LONG_TP1_PCT_OPTIONS],
+                    value=WT_LONG_TP1_PCT_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("TP2 % long"),
+                dcc.Checklist(id="chk-grid-long-tp2-pct",
+                    options=[{"label": f" {v * 100:.1f}%", "value": v} for v in WT_LONG_TP2_PCT_OPTIONS],
+                    value=WT_LONG_TP2_PCT_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("TP1 close %"),
+                dcc.Checklist(id="chk-grid-long-tp1-frac",
+                    options=[{"label": f" {v * 100:.0f}%", "value": v} for v in WT_LONG_TP1_FRACTION_OPTIONS],
+                    value=WT_LONG_TP1_FRACTION_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("TP2 close %"),
+                dcc.Checklist(id="chk-grid-long-tp2-frac",
+                    options=[{"label": f" {v * 100:.0f}%", "value": v} for v in WT_LONG_TP2_FRACTION_OPTIONS],
+                    value=WT_LONG_TP2_FRACTION_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ]),
@@ -2992,6 +3070,9 @@ def _worker(
     bt_long_close_level,
     bt_h4_long_close,
     bt_long_tp1_pct,
+    bt_long_tp2_pct,
+    bt_long_tp1_fraction,
+    bt_long_tp2_fraction,
     bt_long_sl_pct,
     grid_channel,
     grid_avg,
@@ -3008,6 +3089,10 @@ def _worker(
     grid_long_close_level,
     grid_h4_long_close,
     grid_long_sl_pct,
+    grid_long_tp1_pct,
+    grid_long_tp2_pct,
+    grid_long_tp1_fraction,
+    grid_long_tp2_fraction,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -3100,6 +3185,9 @@ def _worker(
             bt_long_close_level,
             bt_h4_long_close,
             bt_long_tp1_pct,
+            bt_long_tp2_pct,
+            bt_long_tp1_fraction,
+            bt_long_tp2_fraction,
             bt_long_sl_pct,
             fee_rate_val,
             slip_bps_val,
@@ -3166,6 +3254,10 @@ def _worker(
             grid_long_close_level,
             grid_h4_long_close,
             grid_long_sl_pct,
+            grid_long_tp1_pct,
+            grid_long_tp2_pct,
+            grid_long_tp1_fraction,
+            grid_long_tp2_fraction,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3529,6 +3621,9 @@ def load_saved_result(n_clicks, filename):
     State("inp-bt-long-close-level","value"),
     State("inp-bt-h4-long-close","value"),
     State("inp-bt-long-tp1-pct","value"),
+    State("inp-bt-long-tp2-pct","value"),
+    State("inp-bt-long-tp1-frac","value"),
+    State("inp-bt-long-tp2-frac","value"),
     State("inp-bt-long-sl-pct","value"),
     State("chk-grid-channel","value"), State("chk-grid-avg","value"),
     State("chk-grid-signal","value"), State("chk-grid-min-level","value"),
@@ -3540,6 +3635,10 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-long-close-level","value"),
     State("chk-grid-h4-long-close","value"),
     State("chk-grid-long-sl-pct","value"),
+    State("chk-grid-long-tp1-pct","value"),
+    State("chk-grid-long-tp2-pct","value"),
+    State("chk-grid-long-tp1-frac","value"),
+    State("chk-grid-long-tp2-frac","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3547,10 +3646,12 @@ def on_run_stop(nr, ns,
     run_mode, direction, fee, slip, opt, live, score,
     bt_channel, bt_avg, bt_signal, bt_min_level,
     bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-    bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct, bt_long_sl_pct,
+    bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct, bt_long_tp2_pct, bt_long_tp1_fraction,
+    bt_long_tp2_fraction, bt_long_sl_pct,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
-    grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct):
+    grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct,
+    grid_long_tp1_pct, grid_long_tp2_pct, grid_long_tp1_fraction, grid_long_tp2_fraction):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3574,10 +3675,12 @@ def on_run_stop(nr, ns,
             fee, slip, opt, live, score,
             bt_channel, bt_avg, bt_signal, bt_min_level,
             bt_reentry, bt_ema_filter, bt_htf_filter, bt_ema_len, bt_long_zone, bt_short_zone, bt_h4_long, bt_h4_short,
-            bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct, bt_long_sl_pct,
+            bt_long_close_level, bt_h4_long_close, bt_long_tp1_pct, bt_long_tp2_pct, bt_long_tp1_fraction,
+            bt_long_tp2_fraction, bt_long_sl_pct,
             grid_channel, grid_avg, grid_signal, grid_min_level,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
             grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct,
+            grid_long_tp1_pct, grid_long_tp2_pct, grid_long_tp1_fraction, grid_long_tp2_fraction,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

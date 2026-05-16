@@ -35,6 +35,14 @@ from bee4_params import (
     WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
     WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
     WT_LONG_REQUIRE_EMA20_RECLAIM,
+    WT_LONG_TP1_FRACTION,
+    WT_LONG_TP1_FRACTION_GRID,
+    WT_LONG_TP1_PCT,
+    WT_LONG_TP1_PCT_GRID,
+    WT_LONG_TP2_FRACTION,
+    WT_LONG_TP2_FRACTION_GRID,
+    WT_LONG_TP2_PCT,
+    WT_LONG_TP2_PCT_GRID,
     WT_MIN_SIGNAL_LEVEL,
     WT_MIN_SIGNAL_LEVEL_GRID,
     WT_SIGNAL_LEN,
@@ -178,6 +186,26 @@ def walk_forward_optimization(
         WT_LONG_EMERGENCY_SL_CAPITAL_PCT_GRID,
         float,
     )
+    long_tp1_pct_grid = _clean_grid(
+        grid_overrides.get("wt_long_tp1_pct"),
+        WT_LONG_TP1_PCT_GRID,
+        float,
+    )
+    long_tp2_pct_grid = _clean_grid(
+        grid_overrides.get("wt_long_tp2_pct"),
+        WT_LONG_TP2_PCT_GRID,
+        float,
+    )
+    long_tp1_fraction_grid = _clean_grid(
+        grid_overrides.get("wt_long_tp1_fraction"),
+        WT_LONG_TP1_FRACTION_GRID,
+        float,
+    )
+    long_tp2_fraction_grid = _clean_grid(
+        grid_overrides.get("wt_long_tp2_fraction"),
+        WT_LONG_TP2_FRACTION_GRID,
+        float,
+    )
     h4_short_filter_grid = (
         _clean_grid(
             grid_overrides.get("wt_h4_short_filter_min"),
@@ -217,6 +245,10 @@ def walk_forward_optimization(
         * len(h4_long_filter_grid)
         * len(h4_long_close_min_grid)
         * len(long_emergency_sl_grid)
+        * len(long_tp1_pct_grid)
+        * len(long_tp2_pct_grid)
+        * len(long_tp1_fraction_grid)
+        * len(long_tp2_fraction_grid)
         * len(h4_short_filter_grid)
     )
     combo_progress_step = max(1, combo_total // 20)
@@ -254,6 +286,10 @@ def walk_forward_optimization(
             "wt_h4_long_filter_max",
             "wt_h4_long_close_min",
             "wt_long_emergency_sl_capital_pct",
+            "wt_long_tp1_pct",
+            "wt_long_tp2_pct",
+            "wt_long_tp1_fraction",
+            "wt_long_tp2_fraction",
         ]
         if shorts_enabled:
             selection_keys.extend(["wt_short_entry_min_below_zero", "wt_h4_short_filter_min"])
@@ -283,6 +319,10 @@ def walk_forward_optimization(
             wt_h4_short_filter_min,
             wt_h4_long_close_min,
             wt_long_emergency_sl_capital_pct,
+            wt_long_tp1_pct,
+            wt_long_tp2_pct,
+            wt_long_tp1_fraction,
+            wt_long_tp2_fraction,
         ) in product(
             channel_grid,
             avg_grid,
@@ -299,6 +339,10 @@ def walk_forward_optimization(
             h4_short_filter_grid,
             h4_long_close_min_grid,
             long_emergency_sl_grid,
+            long_tp1_pct_grid,
+            long_tp2_pct_grid,
+            long_tp1_fraction_grid,
+            long_tp2_fraction_grid,
         ):
             if should_stop is not None and should_stop():
                 stopped = True
@@ -335,6 +379,12 @@ def walk_forward_optimization(
                     "wt_h4_long_close_min": wt_h4_long_close_min,
                     "wt_long_emergency_sl_enabled": wt_long_emergency_sl_capital_pct > 0.0,
                     "wt_long_emergency_sl_capital_pct": wt_long_emergency_sl_capital_pct,
+                    "wt_long_tp1_enabled": wt_long_tp1_pct > 0.0 and wt_long_tp1_fraction > 0.0,
+                    "wt_long_tp1_pct": wt_long_tp1_pct,
+                    "wt_long_tp1_fraction": wt_long_tp1_fraction,
+                    "wt_long_tp2_enabled": wt_long_tp2_pct > 0.0 and wt_long_tp2_fraction > 0.0,
+                    "wt_long_tp2_pct": wt_long_tp2_pct,
+                    "wt_long_tp2_fraction": wt_long_tp2_fraction,
                 }
             )
             if not shorts_enabled:
@@ -441,6 +491,10 @@ def walk_forward_optimization(
                 "wt_long_emergency_sl_capital_pct",
                 WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
             )
+            trades_live["wt_long_tp1_pct"] = best_params.get("wt_long_tp1_pct", WT_LONG_TP1_PCT)
+            trades_live["wt_long_tp2_pct"] = best_params.get("wt_long_tp2_pct", WT_LONG_TP2_PCT)
+            trades_live["wt_long_tp1_fraction"] = best_params.get("wt_long_tp1_fraction", WT_LONG_TP1_FRACTION)
+            trades_live["wt_long_tp2_fraction"] = best_params.get("wt_long_tp2_fraction", WT_LONG_TP2_FRACTION)
             trades_live["wt_long_emergency_sl_enabled"] = bool(
                 best_params.get("wt_long_emergency_sl_enabled", False)
             )
@@ -486,6 +540,16 @@ def walk_forward_optimization(
                     "wt_long_emergency_sl_capital_pct",
                     WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
                 ),
+                "best_wt_long_tp1_pct": best_params.get("wt_long_tp1_pct", WT_LONG_TP1_PCT),
+                "best_wt_long_tp2_pct": best_params.get("wt_long_tp2_pct", WT_LONG_TP2_PCT),
+                "best_wt_long_tp1_fraction": best_params.get(
+                    "wt_long_tp1_fraction",
+                    WT_LONG_TP1_FRACTION,
+                ),
+                "best_wt_long_tp2_fraction": best_params.get(
+                    "wt_long_tp2_fraction",
+                    WT_LONG_TP2_FRACTION,
+                ),
                 "best_wt_long_emergency_sl_enabled": bool(
                     best_params.get("wt_long_emergency_sl_enabled", False)
                 ),
@@ -520,6 +584,10 @@ def walk_forward_optimization(
                 f"close_h1={best_params.get('wt_long_close_min_level', WT_LONG_CLOSE_MIN_LEVEL):.1f} "
                 f"open_h4={best_params.get('wt_h4_long_filter_max', WT_H4_LONG_FILTER_MAX):.1f} "
                 f"close_h4={best_params.get('wt_h4_long_close_min', WT_H4_LONG_CLOSE_MIN):.1f} "
+                f"tp1={best_params.get('wt_long_tp1_pct', WT_LONG_TP1_PCT) * 100:.1f}%/"
+                f"{best_params.get('wt_long_tp1_fraction', WT_LONG_TP1_FRACTION) * 100:.0f}% "
+                f"tp2={best_params.get('wt_long_tp2_pct', WT_LONG_TP2_PCT) * 100:.1f}%/"
+                f"{best_params.get('wt_long_tp2_fraction', WT_LONG_TP2_FRACTION) * 100:.0f}% "
                 f"sl={best_params.get('wt_long_emergency_sl_capital_pct', WT_LONG_EMERGENCY_SL_CAPITAL_PCT) * 100:.0f}% "
                 f"short=off"
             )
@@ -620,6 +688,26 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_long_emergency_sl_capital_pct" in recent.columns
         else WT_LONG_EMERGENCY_SL_CAPITAL_PCT
     )
+    long_tp1_pct = (
+        float(recent["best_wt_long_tp1_pct"].mode().iloc[0])
+        if "best_wt_long_tp1_pct" in recent.columns
+        else WT_LONG_TP1_PCT
+    )
+    long_tp2_pct = (
+        float(recent["best_wt_long_tp2_pct"].mode().iloc[0])
+        if "best_wt_long_tp2_pct" in recent.columns
+        else WT_LONG_TP2_PCT
+    )
+    long_tp1_fraction = (
+        float(recent["best_wt_long_tp1_fraction"].mode().iloc[0])
+        if "best_wt_long_tp1_fraction" in recent.columns
+        else WT_LONG_TP1_FRACTION
+    )
+    long_tp2_fraction = (
+        float(recent["best_wt_long_tp2_fraction"].mode().iloc[0])
+        if "best_wt_long_tp2_fraction" in recent.columns
+        else WT_LONG_TP2_FRACTION
+    )
     allow_longs = True
     allow_shorts = False
     trade_direction = "long"
@@ -649,5 +737,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_h4_short_filter_min": h4_short_filter_min,
         "wt_long_emergency_sl_enabled": long_emergency_sl_capital_pct > 0.0,
         "wt_long_emergency_sl_capital_pct": long_emergency_sl_capital_pct,
+        "wt_long_tp1_enabled": long_tp1_pct > 0.0 and long_tp1_fraction > 0.0,
+        "wt_long_tp1_pct": long_tp1_pct,
+        "wt_long_tp1_fraction": long_tp1_fraction,
+        "wt_long_tp2_enabled": long_tp2_pct > 0.0 and long_tp2_fraction > 0.0,
+        "wt_long_tp2_pct": long_tp2_pct,
+        "wt_long_tp2_fraction": long_tp2_fraction,
     }
 

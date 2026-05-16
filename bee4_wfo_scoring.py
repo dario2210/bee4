@@ -7,6 +7,7 @@ Tryby:
   return_only  – tylko zwrot % (jak wcześniej, szybki)
   balanced     – zwrot + PF + DD + kara za mało transakcji
   defensive    – nacisk na drawdown i stabilność, penalty za wysokie DD
+  growth       – większy nacisk na zwrot, ale z nadal aktywną karą za DD/PF
 
 Użycie:
   from bee4_wfo_scoring import score_params
@@ -32,7 +33,7 @@ def score_params(
       trades          – DataFrame z transakcjami (musi mieć kolumnę 'pnl')
       final_capital   – kapitał końcowy okna opt
       initial_capital – kapitał startowy okna opt
-      mode            – "return_only" | "balanced" | "defensive"
+      mode            – "return_only" | "balanced" | "defensive" | "growth"
 
     Zwraca float – wyższy = lepszy.
     """
@@ -103,6 +104,26 @@ def score_params(
         pf_penalty = 15.0 if pf < 1.0 else 0.0
 
         score = ret_pct * 0.5 + pf_score - dd_penalty - pf_penalty - activity_penalty - concentration_penalty
+        return score
+
+    if mode == "growth":
+        # Priorytet: większy zwrot, ale bez ignorowania jakości wyniku.
+        # DD powyżej 8% jest karany łagodnie, a powyżej 15% mocniej.
+        pf_score = min(pf, 3.0) * 1.5
+        dd_penalty = max(0.0, -max_dd_pct - 8.0) * 0.8
+        severe_dd_penalty = max(0.0, -max_dd_pct - 15.0) * 2.0
+        pf_penalty = 12.0 if pf < 1.0 else 0.0
+
+        score = (
+            ret_pct * 1.5
+            + pf_score
+            + winrate * 2.0
+            - dd_penalty
+            - severe_dd_penalty
+            - pf_penalty
+            - activity_penalty
+            - concentration_penalty * 0.5
+        )
         return score
 
     # fallback → balanced

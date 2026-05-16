@@ -37,6 +37,7 @@ from bee4_engine import (
 )
 from bee4_strategy import Bee4Strategy
 from bee4_wfo import get_latest_best_params, walk_forward_optimization
+from bee4_wfo_scoring import score_params
 
 
 BASE_PARAMS = {
@@ -1263,6 +1264,10 @@ class TestWFOHelpers:
                 "best_wt_h4_long_close_min": [0.0, 20.0, 20.0],
                 "best_wt_h4_short_filter_min": [50.0, 50.0, 60.0],
                 "best_wt_long_emergency_sl_capital_pct": [0.0, 0.05, 0.05],
+                "best_wt_long_tp1_pct": [0.008, 0.01, 0.01],
+                "best_wt_long_tp2_pct": [0.015, 0.02, 0.02],
+                "best_wt_long_tp1_fraction": [0.25, 1.0 / 3.0, 1.0 / 3.0],
+                "best_wt_long_tp2_fraction": [0.25, 0.5, 0.5],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
                 "n_trades_live": [2, 1, 1],
@@ -1287,6 +1292,20 @@ class TestWFOHelpers:
         assert best["wt_h4_short_filter_min"] == pytest.approx(50.0)
         assert best["wt_long_emergency_sl_enabled"] is True
         assert best["wt_long_emergency_sl_capital_pct"] == pytest.approx(0.05)
+        assert best["wt_long_tp1_pct"] == pytest.approx(0.01)
+        assert best["wt_long_tp2_pct"] == pytest.approx(0.02)
+        assert best["wt_long_tp1_fraction"] == pytest.approx(1.0 / 3.0)
+        assert best["wt_long_tp2_fraction"] == pytest.approx(0.5)
+
+    def test_growth_scoring_prefers_higher_return_with_acceptable_risk(self):
+        low_return = pd.DataFrame({"pnl": [100.0, -40.0, 50.0, -30.0, 20.0]})
+        higher_return = pd.DataFrame({"pnl": [500.0, -100.0, 200.0, -50.0, 100.0]})
+
+        low_score = score_params(low_return, 10_100.0, 10_000.0, mode="growth")
+        higher_score = score_params(higher_return, 10_650.0, 10_000.0, mode="growth")
+
+        assert higher_score > low_score
+        assert np.isfinite(higher_score)
 
     def test_wfo_accepts_bee4_2_grid_overrides(self):
         times = pd.date_range("2024-01-01", periods=160, freq="1h", tz="UTC")
@@ -1320,6 +1339,10 @@ class TestWFOHelpers:
             "wt_h4_long_close_min": [0.0],
             "wt_h4_short_filter_min": [50.0],
             "wt_long_emergency_sl_capital_pct": [0.05],
+            "wt_long_tp1_pct": [0.008],
+            "wt_long_tp2_pct": [0.015],
+            "wt_long_tp1_fraction": [0.25],
+            "wt_long_tp2_fraction": [0.5],
         }
 
         _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
@@ -1347,6 +1370,10 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_h4_short_filter_min"]) == {50.0}
         assert set(windows_df["best_wt_long_emergency_sl_capital_pct"]) == {0.05}
         assert set(windows_df["best_wt_long_emergency_sl_enabled"]) == {True}
+        assert set(windows_df["best_wt_long_tp1_pct"]) == {0.008}
+        assert set(windows_df["best_wt_long_tp2_pct"]) == {0.015}
+        assert set(windows_df["best_wt_long_tp1_fraction"]) == {0.25}
+        assert set(windows_df["best_wt_long_tp2_fraction"]) == {0.5}
 
     def test_wfo_carries_open_position_to_next_live_window(self):
         times = pd.date_range("2024-01-01", periods=72, freq="1h", tz="UTC")
@@ -1408,6 +1435,10 @@ class TestWFOHelpers:
             "wt_h4_long_close_min": [999.0],
             "wt_h4_short_filter_min": [50.0],
             "wt_long_emergency_sl_capital_pct": [0.0],
+            "wt_long_tp1_pct": [0.01],
+            "wt_long_tp2_pct": [0.02],
+            "wt_long_tp1_fraction": [1.0],
+            "wt_long_tp2_fraction": [1.0 / 3.0],
         }
 
         trades, _equity, windows_df, final_cap, stopped = walk_forward_optimization(
