@@ -132,6 +132,24 @@ def drp(id_, opts, val):
                         className="wt-drp",
                         style={"color":"#0b1220"})
 
+def pct_choice_options(values, decimals: int = 0):
+    return [
+        {
+            "label": "Off" if float(v) == 0.0 else f"{float(v) * 100.0:.{decimals}f}%",
+            "value": float(v),
+        }
+        for v in values
+    ]
+
+def pct_checklist_options(values, decimals: int = 0):
+    return [
+        {
+            "label": " Off" if float(v) == 0.0 else f" {float(v) * 100.0:.{decimals}f}%",
+            "value": float(v),
+        }
+        for v in values
+    ]
+
 card_s = {
     "background": C["surface"],
     "border": f"1px solid {C['border']}",
@@ -467,9 +485,7 @@ def _strategy_params_from_controls(
             "wt_long_emergency_sl_enabled": emergency_sl_pct > 0.0,
             "wt_long_emergency_sl_capital_pct": emergency_sl_pct,
             "wt_short_tp1_enabled": True,
-            "wt_short_tp1_pct": float(
-                (long_tp1_pct if long_tp1_pct not in (None, "") else DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01) * 100.0)
-            ) / 100.0,
+            "wt_short_tp1_pct": tp1_pct if tp1_pct > 0.0 else float(DEFAULT_PARAMS.get("wt_short_tp1_pct", 0.01)),
             "wt_short_tp1_fraction": float(DEFAULT_PARAMS.get("wt_short_tp1_fraction", 1.0 / 3.0)),
             "atr_stop_enabled": False,
             "breakeven_trigger_atr": 0.0,
@@ -608,6 +624,8 @@ def _format_param_value(value, key: str | None = None):
         return "On" if value else "Off"
     if isinstance(value, float):
         if key and (key.endswith("_pct") or key.endswith("_fraction")):
+            if value == 0.0:
+                return "Off"
             return f"{value * 100.0:.2f}%"
         return round(value, 4)
     return value
@@ -1553,6 +1571,7 @@ var int[] txTradeNo = array.new_int()
 var string[] txLabel = array.new_string()
 var string[] txComment = array.new_string()
 var float[] txPnl = array.new_float()
+var bool[] matched = array.new_bool()
 var bool[] drawn = array.new_bool()
 var int labelsDrawn = 0
 
@@ -1564,6 +1583,7 @@ f_add(_t, _kind, _price, _tradeNo, _label, _comment, _pnl) =>
     array.push(txLabel, _label)
     array.push(txComment, _comment)
     array.push(txPnl, _pnl)
+    array.push(matched, false)
     array.push(drawn, false)
 
 if barstate.isfirst
@@ -1578,8 +1598,12 @@ if array.size(txTime) > 0
     for i = 0 to array.size(txTime) - 1
         t = array.get(txTime, i)
         barEnd = na(time_close) ? time + timeframe.in_seconds(timeframe.period) * 1000 : time_close
-        inBar = time <= t and t < barEnd
+        prevBarEnd = bar_index > 0 ? (na(time_close[1]) ? time[1] + timeframe.in_seconds(timeframe.period) * 1000 : time_close[1]) : na
+        exactInBar = time <= t and t < barEnd
+        snapToBar = not array.get(matched, i) and t < barEnd and (na(prevBarEnd) or t >= prevBarEnd)
+        inBar = exactInBar or snapToBar
         if inBar
+            array.set(matched, i, true)
             kind = array.get(txKind, i)
             price = array.get(txPrice, i)
             labelText = array.get(txLabel, i)
@@ -1597,7 +1621,8 @@ if array.size(txTime) > 0
             closeShortOnBar := closeShortOnBar or isCloseShort
             if showLabels and not array.get(drawn, i) and labelsDrawn < maxLabelsToDraw
                 txt = labelText + (showPrice ? "\\n" + str.tostring(price, format.mintick) : "") + (showPnl ? "\\nPnL: " + str.tostring(pnl, "#.##") : "")
-                label.new(x=bar_index, y=drawBelow ? low : high, text=txt, xloc=xloc.bar_index, yloc=drawBelow ? yloc.belowbar : yloc.abovebar, style=drawBelow ? label.style_label_up : label.style_label_down, color=eventColor, textcolor=color.white, size=size.small, tooltip=comment)
+                labelY = na(price) ? (drawBelow ? low : high) : price
+                label.new(x=bar_index, y=labelY, text=txt, xloc=xloc.bar_index, yloc=yloc.price, style=drawBelow ? label.style_label_up : label.style_label_down, color=eventColor, textcolor=color.white, size=size.small, tooltip=comment)
                 array.set(drawn, i, true)
                 labelsDrawn := labelsDrawn + 1
 
@@ -2592,8 +2617,8 @@ def sidebar():
                 html.Div([field("Short filter H4", inp("inp-bt-h4-short", DEFAULT_PARAMS["wt_h4_short_filter_min"], type="number", step=1))], style={"display":"none"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
-                html.Div([field("TP1 % long", inp("inp-bt-long-tp1-pct", round(DEFAULT_PARAMS["wt_long_tp1_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
-                html.Div([field("TP2 % long", inp("inp-bt-long-tp2-pct", round(DEFAULT_PARAMS["wt_long_tp2_pct"] * 100.0, 2), type="number", min=0, step=0.1))], style={"flex":"1"}),
+                html.Div([field("TP1 % long", drp("inp-bt-long-tp1-pct", pct_choice_options(WT_LONG_TP1_PCT_OPTIONS), DEFAULT_PARAMS["wt_long_tp1_pct"]))], style={"flex":"1"}),
+                html.Div([field("TP2 % long", drp("inp-bt-long-tp2-pct", pct_choice_options(WT_LONG_TP2_PCT_OPTIONS), DEFAULT_PARAMS["wt_long_tp2_pct"]))], style={"flex":"1"}),
                 html.Div([field("Stop loss", drp(
                     "inp-bt-long-sl-pct",
                     [{"label": "Wyłączony", "value": 0.0}] + [
@@ -2605,8 +2630,8 @@ def sidebar():
                 ))], style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
-                html.Div([field("TP1 close %", inp("inp-bt-long-tp1-frac", round(DEFAULT_PARAMS["wt_long_tp1_fraction"] * 100.0, 2), type="number", min=0, max=100, step=1))], style={"flex":"1"}),
-                html.Div([field("TP2 close %", inp("inp-bt-long-tp2-frac", round(DEFAULT_PARAMS["wt_long_tp2_fraction"] * 100.0, 2), type="number", min=0, max=100, step=1))], style={"flex":"1"}),
+                html.Div([field("TP1 close %", drp("inp-bt-long-tp1-frac", pct_choice_options(WT_LONG_TP1_FRACTION_OPTIONS), DEFAULT_PARAMS["wt_long_tp1_fraction"]))], style={"flex":"1"}),
+                html.Div([field("TP2 close %", drp("inp-bt-long-tp2-frac", pct_choice_options(WT_LONG_TP2_FRACTION_OPTIONS), DEFAULT_PARAMS["wt_long_tp2_fraction"]))], style={"flex":"1"}),
             ], style={"display":"flex","gap":"8px"}),
             html.Div([
                 html.Div([field("Entry window H1", inp("inp-bt-reentry", DEFAULT_PARAMS["wt_long_entry_window_bars"], type="number", min=0, max=12, step=1))], style={"flex":"1"}),
@@ -2691,25 +2716,25 @@ def sidebar():
             html.Div([
                 sec("TP1 % long"),
                 dcc.Checklist(id="chk-grid-long-tp1-pct",
-                    options=[{"label": f" {v * 100:.1f}%", "value": v} for v in WT_LONG_TP1_PCT_OPTIONS],
+                    options=pct_checklist_options(WT_LONG_TP1_PCT_OPTIONS),
                     value=WT_LONG_TP1_PCT_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("TP2 % long"),
                 dcc.Checklist(id="chk-grid-long-tp2-pct",
-                    options=[{"label": f" {v * 100:.1f}%", "value": v} for v in WT_LONG_TP2_PCT_OPTIONS],
+                    options=pct_checklist_options(WT_LONG_TP2_PCT_OPTIONS),
                     value=WT_LONG_TP2_PCT_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("TP1 close %"),
                 dcc.Checklist(id="chk-grid-long-tp1-frac",
-                    options=[{"label": f" {v * 100:.0f}%", "value": v} for v in WT_LONG_TP1_FRACTION_OPTIONS],
+                    options=pct_checklist_options(WT_LONG_TP1_FRACTION_OPTIONS),
                     value=WT_LONG_TP1_FRACTION_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("TP2 close %"),
                 dcc.Checklist(id="chk-grid-long-tp2-frac",
-                    options=[{"label": f" {v * 100:.0f}%", "value": v} for v in WT_LONG_TP2_FRACTION_OPTIONS],
+                    options=pct_checklist_options(WT_LONG_TP2_FRACTION_OPTIONS),
                     value=WT_LONG_TP2_FRACTION_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),

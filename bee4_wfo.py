@@ -298,6 +298,7 @@ def walk_forward_optimization(
         best_opt_trades = None
         best_opt_cap = opt_capital
         opt_results: list[dict] = []
+        seen_param_signatures: set[tuple] = set()
 
         if on_combo_progress is not None:
             on_combo_progress(window_id, total_windows, 0, combo_total)
@@ -356,6 +357,13 @@ def walk_forward_optimization(
             ):
                 on_combo_progress(window_id, total_windows, combo_idx, combo_total)
 
+            tp1_enabled = wt_long_tp1_pct > 0.0 and wt_long_tp1_fraction > 0.0
+            tp2_enabled = wt_long_tp2_pct > 0.0 and wt_long_tp2_fraction > 0.0
+            wt_long_tp1_pct = wt_long_tp1_pct if tp1_enabled else 0.0
+            wt_long_tp1_fraction = wt_long_tp1_fraction if tp1_enabled else 0.0
+            wt_long_tp2_pct = wt_long_tp2_pct if tp2_enabled else 0.0
+            wt_long_tp2_fraction = wt_long_tp2_fraction if tp2_enabled else 0.0
+
             params = dict(base_params)
             params.update(
                 {
@@ -379,10 +387,10 @@ def walk_forward_optimization(
                     "wt_h4_long_close_min": wt_h4_long_close_min,
                     "wt_long_emergency_sl_enabled": wt_long_emergency_sl_capital_pct > 0.0,
                     "wt_long_emergency_sl_capital_pct": wt_long_emergency_sl_capital_pct,
-                    "wt_long_tp1_enabled": wt_long_tp1_pct > 0.0 and wt_long_tp1_fraction > 0.0,
+                    "wt_long_tp1_enabled": tp1_enabled,
                     "wt_long_tp1_pct": wt_long_tp1_pct,
                     "wt_long_tp1_fraction": wt_long_tp1_fraction,
-                    "wt_long_tp2_enabled": wt_long_tp2_pct > 0.0 and wt_long_tp2_fraction > 0.0,
+                    "wt_long_tp2_enabled": tp2_enabled,
                     "wt_long_tp2_pct": wt_long_tp2_pct,
                     "wt_long_tp2_fraction": wt_long_tp2_fraction,
                 }
@@ -396,6 +404,10 @@ def walk_forward_optimization(
                         "short_trading_enabled": False,
                     }
                 )
+            param_signature = tuple(params.get(key) for key in selection_keys)
+            if param_signature in seen_param_signatures:
+                continue
+            seen_param_signatures.add(param_signature)
             strat = Bee4Strategy(params, fee_rate=fee_rate)
             trades_opt, _, final_cap_opt = strat.run(opt_slice, opt_capital)
             score = score_params(trades_opt, final_cap_opt, opt_capital, mode=score_mode)

@@ -1610,6 +1610,9 @@ class TestPineExport:
         assert 'f_add(timestamp("UTC",2025,1,1,0,0),"OPEN_LONG",1000,1,"T1 OPEN"' in pine
         assert 'f_add(timestamp("UTC",2025,2,1,0,0),"OPEN_LONG",1100,2,"T2 OPEN"' in pine
         assert 'text="LONG"' in pine
+        assert "snapToBar" in pine
+        assert "array.set(matched, i, true)" in pine
+        assert "yloc=yloc.price" in pine
 
 
 if __name__ == "__main__":
