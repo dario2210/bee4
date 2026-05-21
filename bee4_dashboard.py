@@ -33,6 +33,7 @@ from bee4_params import (
     WT_LONG_TP1_PCT_GRID, WT_LONG_TP1_PCT_OPTIONS,
     WT_LONG_TP2_FRACTION_GRID, WT_LONG_TP2_FRACTION_OPTIONS,
     WT_LONG_TP2_PCT_GRID, WT_LONG_TP2_PCT_OPTIONS,
+    WT_LONG_TP1_TIMEOUT_HOURS_GRID, WT_LONG_TP1_TIMEOUT_HOURS_OPTIONS,
 )
 from bee4_data     import (
     htf_wt1_column,
@@ -519,6 +520,7 @@ def _grid_overrides_from_controls(
     long_tp2_pct_grid,
     long_tp1_fraction_grid,
     long_tp2_fraction_grid,
+    long_tp1_timeout_hours_grid,
 ) -> dict:
     return {
         "wt_channel_len": _clean_selected_values(channel_grid, WT_CHANNEL_LEN_GRID, int),
@@ -575,6 +577,11 @@ def _grid_overrides_from_controls(
             WT_LONG_TP2_FRACTION_GRID,
             float,
         ),
+        "wt_long_tp1_timeout_hours": _clean_selected_values(
+            long_tp1_timeout_hours_grid,
+            WT_LONG_TP1_TIMEOUT_HOURS_GRID,
+            float,
+        ),
         "wt_h4_short_filter_min": [float(DEFAULT_PARAMS["wt_h4_short_filter_min"])],
     }
 
@@ -598,6 +605,7 @@ PARAM_SUMMARY_ORDER = [
     "wt_long_tp1_fraction",
     "wt_long_tp2_pct",
     "wt_long_tp2_fraction",
+    "wt_long_tp1_timeout_hours",
     "fee_rate",
     "slippage_bps",
 ]
@@ -614,6 +622,7 @@ PARAM_SUMMARY_LABELS = {
     "wt_long_tp1_fraction": "Long TP1 fraction",
     "wt_long_tp2_pct": "Long TP2",
     "wt_long_tp2_fraction": "Long TP2 fraction",
+    "wt_long_tp1_timeout_hours": "Max time to TP1",
     "fee_rate": "Fee rate",
     "slippage_bps": "Slippage bps",
 }
@@ -627,6 +636,8 @@ def _format_param_value(value, key: str | None = None):
             if value == 0.0:
                 return "Off"
             return f"{value * 100.0:.2f}%"
+        if key and key.endswith("_hours"):
+            return "Off" if value == 0.0 else f"{value:.0f}h"
         return round(value, 4)
     return value
 
@@ -756,6 +767,7 @@ def fig_pdist(wd):
         ("best_wt_long_tp2_pct", "TP2 % long", C["amber"]),
         ("best_wt_long_tp1_fraction", "TP1 close %", C["purple"]),
         ("best_wt_long_tp2_fraction", "TP2 close %", C["blue"]),
+        ("best_wt_long_tp1_timeout_hours", "Max time to TP1", C["red"]),
     ]
     rows = max(1, (len(specs) + 1) // 2)
     fig = make_subplots(
@@ -772,7 +784,7 @@ def fig_pdist(wd):
         col_idx = idx % 2 + 1
         vc = wd[col].value_counts().sort_index()
         labels = [
-            "on" if v is True else "off" if v is False else f"{float(v) * 100:.1f}%" if ("pct" in col or "fraction" in col) else str(v)
+            "on" if v is True else "off" if v is False else f"{float(v) * 100:.1f}%" if ("pct" in col or "fraction" in col) else f"{float(v):.0f}h" if col.endswith("_hours") else str(v)
             for v in vc.index
         ]
         fig.add_trace(
@@ -1395,6 +1407,21 @@ def _annotate_trades(trades_df: pd.DataFrame) -> pd.DataFrame:
         "exit_signal_level", "exit_h4_wt1", "exit_h4_wt2", "exit_h4_delta",
         "holding_hours", "time_to_tp1_hours",
         "close_fraction", "remaining_fraction_after", "position_notional", "logical_trade_no",
+        "entry_window_id", "exit_window_id",
+        "entry_params_wt_channel_len", "entry_params_wt_avg_len", "entry_params_wt_signal_len",
+        "entry_params_wt_reentry_window_bars", "entry_params_wt_long_entry_max_above_zero",
+        "entry_params_wt_long_close_min_level", "entry_params_wt_h4_long_filter_max",
+        "entry_params_wt_h4_long_close_min", "entry_params_wt_long_tp1_pct",
+        "entry_params_wt_long_tp2_pct", "entry_params_wt_long_tp1_fraction",
+        "entry_params_wt_long_tp2_fraction", "entry_params_wt_long_tp1_timeout_hours",
+        "entry_params_wt_long_emergency_sl_capital_pct",
+        "exit_params_wt_channel_len", "exit_params_wt_avg_len", "exit_params_wt_signal_len",
+        "exit_params_wt_reentry_window_bars", "exit_params_wt_long_entry_max_above_zero",
+        "exit_params_wt_long_close_min_level", "exit_params_wt_h4_long_filter_max",
+        "exit_params_wt_h4_long_close_min", "exit_params_wt_long_tp1_pct",
+        "exit_params_wt_long_tp2_pct", "exit_params_wt_long_tp1_fraction",
+        "exit_params_wt_long_tp2_fraction", "exit_params_wt_long_tp1_timeout_hours",
+        "exit_params_wt_long_emergency_sl_capital_pct",
     ]
     for col in numeric_cols:
         if col in tdf.columns:
@@ -1423,6 +1450,7 @@ def _trade_table_frame(trades_df: pd.DataFrame) -> pd.DataFrame:
         c for c in [
             "trade_no", "side", "entry_time", "exit_time", "entry_price",
             "exit_price", "logical_trade_no", "trade_event", "trade_label",
+            "entry_window_id", "exit_window_id",
             "holding_hours", "time_to_tp1_hours",
             "close_fraction", "remaining_fraction_after",
             "gross_ret", "fee_ret", "net_ret", "pnl", "fee_usd", "reason",
@@ -1471,6 +1499,47 @@ def _pine_timestamp(value) -> str | None:
     if pd.isna(ts):
         return None
     return f'timestamp("UTC",{ts.year},{ts.month},{ts.day},{ts.hour},{ts.minute})'
+
+
+def _fmt_pine_value(value, digits: int = 2) -> str:
+    try:
+        numeric = pd.to_numeric(value, errors="coerce")
+    except Exception:
+        return "n/a"
+    if pd.isna(numeric) or not np.isfinite(float(numeric)):
+        return "n/a"
+    if digits <= 0:
+        return f"{float(numeric):.0f}"
+    text = f"{float(numeric):.{digits}f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _fmt_pine_scaled_value(value, multiplier: float, digits: int = 1) -> str:
+    try:
+        numeric = pd.to_numeric(value, errors="coerce")
+    except Exception:
+        return "n/a"
+    if pd.isna(numeric) or not np.isfinite(float(numeric)):
+        return "n/a"
+    return _fmt_pine_value(float(numeric) * multiplier, digits)
+
+
+def _pine_params_comment(trade: pd.Series, prefix: str) -> str:
+    window_id = _fmt_pine_value(trade.get(f"{prefix}_window_id"), 0)
+    open_h1 = _fmt_pine_value(trade.get(f"{prefix}_params_wt_long_entry_max_above_zero"), 0)
+    open_h4 = _fmt_pine_value(trade.get(f"{prefix}_params_wt_h4_long_filter_max"), 0)
+    close_h1 = _fmt_pine_value(trade.get(f"{prefix}_params_wt_long_close_min_level"), 0)
+    close_h4 = _fmt_pine_value(trade.get(f"{prefix}_params_wt_h4_long_close_min"), 0)
+    tp1 = _fmt_pine_scaled_value(trade.get(f"{prefix}_params_wt_long_tp1_pct"), 100.0, 1)
+    tp2 = _fmt_pine_scaled_value(trade.get(f"{prefix}_params_wt_long_tp2_pct"), 100.0, 1)
+    f1 = _fmt_pine_scaled_value(trade.get(f"{prefix}_params_wt_long_tp1_fraction"), 100.0, 0)
+    f2 = _fmt_pine_scaled_value(trade.get(f"{prefix}_params_wt_long_tp2_fraction"), 100.0, 0)
+    timeout = _fmt_pine_value(trade.get(f"{prefix}_params_wt_long_tp1_timeout_hours"), 0)
+    return (
+        f"{prefix}_window={window_id} | open H1/H4={open_h1}/{open_h4} | "
+        f"close H1/H4={close_h1}/{close_h4} | TP1={tp1}%/{f1}% | "
+        f"TP2={tp2}%/{f2}% | TP1 timeout={timeout}h"
+    )
 
 
 def _pine_trade_add_lines(result_data: dict) -> list[str]:
@@ -1522,8 +1591,8 @@ def _pine_trade_add_lines(result_data: dict) -> list[str]:
         exit_kind = f"{event}_{direction}"
         entry_label = f"T{pine_trade_no} OPEN"
         exit_label = f"T{pine_trade_no} {event}"
-        entry_comment = f"{entry_label} {direction}"
-        exit_comment = f"{exit_label} {direction}"
+        entry_comment = f"{entry_label} {direction} | {_pine_params_comment(trade, 'entry')}"
+        exit_comment = f"{exit_label} {direction} | {_pine_params_comment(trade, 'exit')}"
 
         if trade_key not in added_entries:
             lines.append(
@@ -2738,6 +2807,12 @@ def sidebar():
                     value=WT_LONG_TP2_FRACTION_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
+                sec("Max time to TP1"),
+                dcc.Checklist(id="chk-grid-long-tp1-timeout",
+                    options=[{"label": f" {v:.0f}h", "value": v} for v in WT_LONG_TP1_TIMEOUT_HOURS_OPTIONS],
+                    value=WT_LONG_TP1_TIMEOUT_HOURS_GRID, inline=True,
+                    inputStyle={"marginRight":"4px","accentColor":C["blue"]},
+                    labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ]),
             html.Div([
                 sec("Siatka Min level"),
@@ -2812,7 +2887,7 @@ def sidebar():
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             html.Div(
-                "WFO w BEE4_4 testuje tylko long: entry window H1, open level H1/H4, close level H1/H4 oraz stop loss. Open level oznacza wartość lub niżej, close level wartość lub wyżej.",
+                "WFO w BEE4_4 testuje tylko long: entry window H1, open level H1/H4, close level H1/H4, TP1/TP2, części realizacji, max czas do TP1 oraz stop loss. Open level oznacza wartość lub niżej, close level wartość lub wyżej.",
                 style={"fontSize":"11px","color":C["muted"],"marginTop":"8px"},
             ),
         ],id="panel-wfo",style=card_s),
@@ -3118,6 +3193,7 @@ def _worker(
     grid_long_tp2_pct,
     grid_long_tp1_fraction,
     grid_long_tp2_fraction,
+    grid_long_tp1_timeout_hours,
 ):
 
     csv_path = str(_APP_DIR / f"{symbol.lower()}_{tf}.csv")
@@ -3283,6 +3359,7 @@ def _worker(
             grid_long_tp2_pct,
             grid_long_tp1_fraction,
             grid_long_tp2_fraction,
+            grid_long_tp1_timeout_hours,
         )
 
         ob, lb = wfo_bars(tf, opt_days_val, live_days_val)
@@ -3664,6 +3741,7 @@ def load_saved_result(n_clicks, filename):
     State("chk-grid-long-tp2-pct","value"),
     State("chk-grid-long-tp1-frac","value"),
     State("chk-grid-long-tp2-frac","value"),
+    State("chk-grid-long-tp1-timeout","value"),
     prevent_initial_call=True,
 )
 def on_run_stop(nr, ns,
@@ -3676,7 +3754,8 @@ def on_run_stop(nr, ns,
     grid_channel, grid_avg, grid_signal, grid_min_level,
     grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
     grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct,
-    grid_long_tp1_pct, grid_long_tp2_pct, grid_long_tp1_fraction, grid_long_tp2_fraction):
+    grid_long_tp1_pct, grid_long_tp2_pct, grid_long_tp1_fraction, grid_long_tp2_fraction,
+    grid_long_tp1_timeout_hours):
 
     _sty_active = {"flex":"1","background":C["red"],"border":"none","borderRadius":"8px",
                    "color":"#fff","padding":"10px","fontSize":"13px","fontWeight":"600",
@@ -3706,6 +3785,7 @@ def on_run_stop(nr, ns,
             grid_reentry, grid_ema_filter, grid_htf_filter, grid_ema_len, grid_long_zone, grid_short_zone,
             grid_h4_long, grid_h4_short, grid_long_close_level, grid_h4_long_close, grid_long_sl_pct,
             grid_long_tp1_pct, grid_long_tp2_pct, grid_long_tp1_fraction, grid_long_tp2_fraction,
+            grid_long_tp1_timeout_hours,
         ))
         t.start()
         return True, False, _sty_active        # Run zablokuj, Stop aktywuj

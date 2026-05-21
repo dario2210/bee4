@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import numpy as np
+import pandas as pd
 
 from bee4_data import (
     htf_prev_wt1_column,
@@ -208,6 +209,17 @@ def _float_or_nan(value) -> float:
         return float(value)
 
 
+def _hours_between(start, end) -> float:
+    try:
+        start_ts = pd.to_datetime(start, utc=True, errors="coerce")
+        end_ts = pd.to_datetime(end, utc=True, errors="coerce")
+        if pd.isna(start_ts) or pd.isna(end_ts):
+            return np.nan
+        return max(0.0, (end_ts - start_ts).total_seconds() / 3600.0)
+    except Exception:
+        return np.nan
+
+
 def _ema_filter_ok(bar: BarData, side: Side, required: bool) -> bool:
     if not required:
         return True
@@ -304,6 +316,12 @@ def _long_exit_momentum_weakening(bar: BarData, prev_bar: BarData) -> bool:
     if any(np.isnan(v) for v in [bar.wt1, bar.wt_delta, prev_bar.wt1, prev_bar.wt_delta]):
         return False
     return _cross_down(bar, prev_bar) or bar.wt1 < prev_bar.wt1 or bar.wt_delta < prev_bar.wt_delta
+
+
+def _h1_lines_not_rising(bar: BarData, prev_bar: BarData) -> bool:
+    if any(np.isnan(v) for v in [bar.wt1, bar.wt2, prev_bar.wt1, prev_bar.wt2]):
+        return False
+    return bar.wt1 <= prev_bar.wt1 and bar.wt2 <= prev_bar.wt2
 
 
 def generate_entry_signal(
@@ -554,6 +572,30 @@ def generate_exit_signal(
         if emergency_sig.action != "none":
             emergency_sig.meta["bars_in_position"] = position.bars_in_position
             return emergency_sig
+        tp1_timeout_hours = float(params.get("wt_long_tp1_timeout_hours", 0.0) or 0.0)
+        hours_since_entry = _hours_between(position.entry_time, bar.time)
+        if (
+            tp1_timeout_hours > 0.0
+            and not position.tp1_taken
+            and not np.isnan(hours_since_entry)
+            and hours_since_entry >= tp1_timeout_hours
+            and not np.isnan(bar.close)
+            and bar.close < position.entry_price
+            and _h1_lines_not_rising(bar, prev_bar)
+        ):
+            meta = _meta("LONG_TP1_TIMEOUT_MOMENTUM_EXIT")
+            meta["hours_since_entry"] = round(hours_since_entry, 4)
+            meta["tp1_timeout_hours"] = tp1_timeout_hours
+            meta["entry_price"] = round(position.entry_price, 4)
+            meta["close_price"] = round(bar.close, 4)
+            meta["exit_wt1_slope"] = round(bar.wt1 - prev_bar.wt1, 4)
+            meta["exit_wt2_slope"] = round(bar.wt2 - prev_bar.wt2, 4)
+            meta["remaining_fraction_before"] = position.remaining_fraction
+            return Signal(
+                action="close_force",
+                reason="LONG_TP1_TIMEOUT_MOMENTUM_EXIT",
+                meta=meta,
+            )
         if (
             bool(params.get("wt_long_tp1_breakeven_enabled", True))
             and position.tp1_taken

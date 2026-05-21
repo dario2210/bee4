@@ -73,6 +73,7 @@ BASE_PARAMS = {
     "wt_long_tp2_enabled": True,
     "wt_long_tp2_pct": 0.02,
     "wt_long_tp2_fraction": 1.0 / 3.0,
+    "wt_long_tp1_timeout_hours": 72.0,
     "wt_long_emergency_sl_enabled": False,
     "wt_long_emergency_sl_capital_pct": 0.0,
     "wt_short_tp1_enabled": True,
@@ -116,6 +117,7 @@ SHORTS_ENABLED_PARAMS = {
 
 
 def _make_bar(
+    time=pd.Timestamp("2024-01-01 00:00:00", tz="UTC"),
     close=1800.0,
     wt1=-40.0,
     wt2=-45.0,
@@ -125,7 +127,7 @@ def _make_bar(
     h4_prev_wt2=-22.0,
 ):
     return BarData(
-        time=pd.Timestamp("2024-01-01 00:00:00", tz="UTC"),
+        time=time,
         open=close,
         high=close + 5.0,
         low=close - 5.0,
@@ -622,6 +624,29 @@ class TestExitSignals:
         assert sig.reason == "LONG_TP2_BREAKEVEN_EXIT"
         assert sig.exit_price == pytest.approx(1800.0)
         assert sig.meta["remaining_fraction_before"] == pytest.approx(1.0 / 3.0)
+
+    def test_long_exits_after_72h_without_tp1_when_under_entry_and_h1_not_rising(self):
+        entry_time = pd.Timestamp("2026-01-01 00:00:00", tz="UTC")
+        prev = _make_bar(time=entry_time + pd.Timedelta(hours=72), close=1790.0, wt1=-20.0, wt2=-25.0)
+        bar = _make_bar(time=entry_time + pd.Timedelta(hours=73), close=1785.0, wt1=-22.0, wt2=-26.0)
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=entry_time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "close_force"
+        assert sig.reason == "LONG_TP1_TIMEOUT_MOMENTUM_EXIT"
+        assert sig.meta["hours_since_entry"] == pytest.approx(73.0)
+        assert sig.meta["tp1_timeout_hours"] == pytest.approx(72.0)
+
+    def test_long_timeout_before_tp1_does_not_exit_when_h1_lines_rise(self):
+        entry_time = pd.Timestamp("2026-01-01 00:00:00", tz="UTC")
+        prev = _make_bar(time=entry_time + pd.Timedelta(hours=72), close=1790.0, wt1=-24.0, wt2=-28.0)
+        bar = _make_bar(time=entry_time + pd.Timedelta(hours=73), close=1785.0, wt1=-22.0, wt2=-26.0)
+        pos = PositionState(side="long", entry_price=1800.0, entry_time=entry_time)
+
+        sig = generate_exit_signal(bar, prev, BASE_PARAMS, pos)
+
+        assert sig.action == "none"
 
     def test_short_tp1_closes_one_third_when_price_drops_one_percent(self):
         bar = _make_bar(close=1800.0)
@@ -1268,6 +1293,7 @@ class TestWFOHelpers:
                 "best_wt_long_tp2_pct": [0.015, 0.02, 0.02],
                 "best_wt_long_tp1_fraction": [0.25, 1.0 / 3.0, 1.0 / 3.0],
                 "best_wt_long_tp2_fraction": [0.25, 0.5, 0.5],
+                "best_wt_long_tp1_timeout_hours": [24.0, 48.0, 48.0],
                 "allow_longs": [True, True, True],
                 "allow_shorts": [False, False, False],
                 "n_trades_live": [2, 1, 1],
@@ -1296,6 +1322,7 @@ class TestWFOHelpers:
         assert best["wt_long_tp2_pct"] == pytest.approx(0.02)
         assert best["wt_long_tp1_fraction"] == pytest.approx(1.0 / 3.0)
         assert best["wt_long_tp2_fraction"] == pytest.approx(0.5)
+        assert best["wt_long_tp1_timeout_hours"] == pytest.approx(48.0)
 
     def test_growth_scoring_prefers_higher_return_with_acceptable_risk(self):
         low_return = pd.DataFrame({"pnl": [100.0, -40.0, 50.0, -30.0, 20.0]})
@@ -1343,6 +1370,7 @@ class TestWFOHelpers:
             "wt_long_tp2_pct": [0.015],
             "wt_long_tp1_fraction": [0.25],
             "wt_long_tp2_fraction": [0.5],
+            "wt_long_tp1_timeout_hours": [48.0],
         }
 
         _trades, _equity, windows_df, _final_cap, stopped = walk_forward_optimization(
@@ -1374,6 +1402,7 @@ class TestWFOHelpers:
         assert set(windows_df["best_wt_long_tp2_pct"]) == {0.015}
         assert set(windows_df["best_wt_long_tp1_fraction"]) == {0.25}
         assert set(windows_df["best_wt_long_tp2_fraction"]) == {0.5}
+        assert set(windows_df["best_wt_long_tp1_timeout_hours"]) == {48.0}
 
     def test_wfo_carries_open_position_to_next_live_window(self):
         times = pd.date_range("2024-01-01", periods=72, freq="1h", tz="UTC")
@@ -1439,6 +1468,7 @@ class TestWFOHelpers:
             "wt_long_tp2_pct": [0.02],
             "wt_long_tp1_fraction": [1.0],
             "wt_long_tp2_fraction": [1.0 / 3.0],
+            "wt_long_tp1_timeout_hours": [72.0],
         }
 
         trades, _equity, windows_df, final_cap, stopped = walk_forward_optimization(
@@ -1469,6 +1499,12 @@ class TestWFOHelpers:
         assert trades.iloc[0]["entry_time"] == times[47]
         assert trades.iloc[0]["exit_time"] == times[48]
         assert trades.iloc[0]["window_id"] == 1
+        assert trades.iloc[0]["entry_window_id"] == 0
+        assert trades.iloc[0]["exit_window_id"] == 1
+        assert trades.iloc[0]["entry_params_wt_long_entry_max_above_zero"] == pytest.approx(-30.0)
+        assert trades.iloc[0]["exit_params_wt_long_entry_max_above_zero"] == pytest.approx(-30.0)
+        assert trades.iloc[0]["entry_params_wt_long_tp1_timeout_hours"] == pytest.approx(72.0)
+        assert trades.iloc[0]["exit_params_wt_long_tp1_timeout_hours"] == pytest.approx(72.0)
         assert trades.iloc[0]["trade_event"] == "TP1"
         assert final_cap > 10_000.0
 
@@ -1590,6 +1626,26 @@ class TestPineExport:
                     "logical_trade_no": 1,
                     "trade_event": "EXIT",
                     "pnl": 100.0,
+                    "entry_window_id": 2,
+                    "exit_window_id": 3,
+                    "entry_params_wt_long_entry_max_above_zero": -50.0,
+                    "entry_params_wt_h4_long_filter_max": -50.0,
+                    "entry_params_wt_long_close_min_level": 60.0,
+                    "entry_params_wt_h4_long_close_min": 60.0,
+                    "entry_params_wt_long_tp1_pct": 0.01,
+                    "entry_params_wt_long_tp2_pct": 0.03,
+                    "entry_params_wt_long_tp1_fraction": 0.25,
+                    "entry_params_wt_long_tp2_fraction": 0.25,
+                    "entry_params_wt_long_tp1_timeout_hours": 72.0,
+                    "exit_params_wt_long_entry_max_above_zero": -40.0,
+                    "exit_params_wt_h4_long_filter_max": -40.0,
+                    "exit_params_wt_long_close_min_level": 50.0,
+                    "exit_params_wt_h4_long_close_min": 50.0,
+                    "exit_params_wt_long_tp1_pct": 0.02,
+                    "exit_params_wt_long_tp2_pct": 0.05,
+                    "exit_params_wt_long_tp1_fraction": 0.5,
+                    "exit_params_wt_long_tp2_fraction": 0.5,
+                    "exit_params_wt_long_tp1_timeout_hours": 48.0,
                 },
                 {
                     "side": "long",
@@ -1609,6 +1665,10 @@ class TestPineExport:
         assert "OPEN LONG" in pine
         assert 'f_add(timestamp("UTC",2025,1,1,0,0),"OPEN_LONG",1000,1,"T1 OPEN"' in pine
         assert 'f_add(timestamp("UTC",2025,2,1,0,0),"OPEN_LONG",1100,2,"T2 OPEN"' in pine
+        assert "entry_window=2 | open H1/H4=-50/-50 | close H1/H4=60/60" in pine
+        assert "TP1=1%/25% | TP2=3%/25% | TP1 timeout=72h" in pine
+        assert "exit_window=3 | open H1/H4=-40/-40 | close H1/H4=50/50" in pine
+        assert "TP1=2%/50% | TP2=5%/50% | TP1 timeout=48h" in pine
         assert 'text="LONG"' in pine
         assert "snapToBar" in pine
         assert "array.set(matched, i, true)" in pine

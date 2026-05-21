@@ -58,6 +58,21 @@ class TradeRecord:
     entry_h4_wt1: float = 0.0
     entry_h4_wt2: float = 0.0
     entry_h4_delta: float = 0.0
+    entry_window_id: float = np.nan
+    entry_params_wt_channel_len: float = np.nan
+    entry_params_wt_avg_len: float = np.nan
+    entry_params_wt_signal_len: float = np.nan
+    entry_params_wt_reentry_window_bars: float = np.nan
+    entry_params_wt_long_entry_max_above_zero: float = np.nan
+    entry_params_wt_long_close_min_level: float = np.nan
+    entry_params_wt_h4_long_filter_max: float = np.nan
+    entry_params_wt_h4_long_close_min: float = np.nan
+    entry_params_wt_long_tp1_pct: float = np.nan
+    entry_params_wt_long_tp2_pct: float = np.nan
+    entry_params_wt_long_tp1_fraction: float = np.nan
+    entry_params_wt_long_tp2_fraction: float = np.nan
+    entry_params_wt_long_tp1_timeout_hours: float = np.nan
+    entry_params_wt_long_emergency_sl_capital_pct: float = np.nan
     exit_wt1: float = 0.0
     exit_wt2: float = 0.0
     exit_delta: float = 0.0
@@ -70,6 +85,21 @@ class TradeRecord:
     exit_h4_wt1: float = 0.0
     exit_h4_wt2: float = 0.0
     exit_h4_delta: float = 0.0
+    exit_window_id: float = np.nan
+    exit_params_wt_channel_len: float = np.nan
+    exit_params_wt_avg_len: float = np.nan
+    exit_params_wt_signal_len: float = np.nan
+    exit_params_wt_reentry_window_bars: float = np.nan
+    exit_params_wt_long_entry_max_above_zero: float = np.nan
+    exit_params_wt_long_close_min_level: float = np.nan
+    exit_params_wt_h4_long_filter_max: float = np.nan
+    exit_params_wt_h4_long_close_min: float = np.nan
+    exit_params_wt_long_tp1_pct: float = np.nan
+    exit_params_wt_long_tp2_pct: float = np.nan
+    exit_params_wt_long_tp1_fraction: float = np.nan
+    exit_params_wt_long_tp2_fraction: float = np.nan
+    exit_params_wt_long_tp1_timeout_hours: float = np.nan
+    exit_params_wt_long_emergency_sl_capital_pct: float = np.nan
     close_fraction: float = 1.0
     remaining_fraction_after: float = 0.0
     logical_trade_no: int = 0
@@ -87,6 +117,29 @@ class Bee4Strategy:
         self.spread_bps = params.get("spread_bps", 0.0)
         self.position: Optional[PositionState] = None
         self.next_trade_id = 1
+
+    PARAM_SNAPSHOT_KEYS = (
+        "wt_channel_len",
+        "wt_avg_len",
+        "wt_signal_len",
+        "wt_long_entry_window_bars",
+        "wt_long_entry_max_above_zero",
+        "wt_long_close_min_level",
+        "wt_h4_long_filter_max",
+        "wt_h4_long_close_min",
+        "wt_long_tp1_pct",
+        "wt_long_tp2_pct",
+        "wt_long_tp1_fraction",
+        "wt_long_tp2_fraction",
+        "wt_long_tp1_timeout_hours",
+        "wt_long_emergency_sl_capital_pct",
+    )
+
+    def _params_snapshot(self, prefix: str) -> dict:
+        return {
+            f"{prefix}{key}": self.params.get(key, np.nan)
+            for key in self.PARAM_SNAPSHOT_KEYS
+        }
 
     @staticmethod
     def _trade_event(signal: Signal) -> str:
@@ -147,6 +200,8 @@ class Bee4Strategy:
         trade_label = f"{trade_id} {trade_event}".strip()
         holding_hours = self._holding_hours(pos.entry_time, bar.time)
         time_to_tp1_hours = holding_hours if trade_event == "TP1" else np.nan
+        exit_params = self._params_snapshot("exit_params_")
+        exit_window_id = self.params.get("_wfo_window_id", xm.get("exit_window_id", np.nan))
 
         rec = TradeRecord(
             side=pos.side,
@@ -178,6 +233,24 @@ class Bee4Strategy:
             entry_h4_wt1=em.get("entry_h4_wt1", 0.0),
             entry_h4_wt2=em.get("entry_h4_wt2", 0.0),
             entry_h4_delta=em.get("entry_h4_delta", 0.0),
+            entry_window_id=em.get("entry_window_id", np.nan),
+            entry_params_wt_channel_len=em.get("entry_params_wt_channel_len", np.nan),
+            entry_params_wt_avg_len=em.get("entry_params_wt_avg_len", np.nan),
+            entry_params_wt_signal_len=em.get("entry_params_wt_signal_len", np.nan),
+            entry_params_wt_reentry_window_bars=em.get("entry_params_wt_long_entry_window_bars", np.nan),
+            entry_params_wt_long_entry_max_above_zero=em.get("entry_params_wt_long_entry_max_above_zero", np.nan),
+            entry_params_wt_long_close_min_level=em.get("entry_params_wt_long_close_min_level", np.nan),
+            entry_params_wt_h4_long_filter_max=em.get("entry_params_wt_h4_long_filter_max", np.nan),
+            entry_params_wt_h4_long_close_min=em.get("entry_params_wt_h4_long_close_min", np.nan),
+            entry_params_wt_long_tp1_pct=em.get("entry_params_wt_long_tp1_pct", np.nan),
+            entry_params_wt_long_tp2_pct=em.get("entry_params_wt_long_tp2_pct", np.nan),
+            entry_params_wt_long_tp1_fraction=em.get("entry_params_wt_long_tp1_fraction", np.nan),
+            entry_params_wt_long_tp2_fraction=em.get("entry_params_wt_long_tp2_fraction", np.nan),
+            entry_params_wt_long_tp1_timeout_hours=em.get("entry_params_wt_long_tp1_timeout_hours", np.nan),
+            entry_params_wt_long_emergency_sl_capital_pct=em.get(
+                "entry_params_wt_long_emergency_sl_capital_pct",
+                np.nan,
+            ),
             exit_wt1=xm.get("exit_wt1", 0.0),
             exit_wt2=xm.get("exit_wt2", 0.0),
             exit_delta=xm.get("exit_delta", 0.0),
@@ -190,6 +263,23 @@ class Bee4Strategy:
             exit_h4_wt1=xm.get("exit_h4_wt1", 0.0),
             exit_h4_wt2=xm.get("exit_h4_wt2", 0.0),
             exit_h4_delta=xm.get("exit_h4_delta", 0.0),
+            exit_window_id=exit_window_id,
+            exit_params_wt_channel_len=exit_params["exit_params_wt_channel_len"],
+            exit_params_wt_avg_len=exit_params["exit_params_wt_avg_len"],
+            exit_params_wt_signal_len=exit_params["exit_params_wt_signal_len"],
+            exit_params_wt_reentry_window_bars=exit_params["exit_params_wt_long_entry_window_bars"],
+            exit_params_wt_long_entry_max_above_zero=exit_params["exit_params_wt_long_entry_max_above_zero"],
+            exit_params_wt_long_close_min_level=exit_params["exit_params_wt_long_close_min_level"],
+            exit_params_wt_h4_long_filter_max=exit_params["exit_params_wt_h4_long_filter_max"],
+            exit_params_wt_h4_long_close_min=exit_params["exit_params_wt_h4_long_close_min"],
+            exit_params_wt_long_tp1_pct=exit_params["exit_params_wt_long_tp1_pct"],
+            exit_params_wt_long_tp2_pct=exit_params["exit_params_wt_long_tp2_pct"],
+            exit_params_wt_long_tp1_fraction=exit_params["exit_params_wt_long_tp1_fraction"],
+            exit_params_wt_long_tp2_fraction=exit_params["exit_params_wt_long_tp2_fraction"],
+            exit_params_wt_long_tp1_timeout_hours=exit_params["exit_params_wt_long_tp1_timeout_hours"],
+            exit_params_wt_long_emergency_sl_capital_pct=exit_params[
+                "exit_params_wt_long_emergency_sl_capital_pct"
+            ],
             close_fraction=close_fraction,
             remaining_fraction_after=remaining_after,
             logical_trade_no=trade_id,
@@ -290,6 +380,8 @@ class Bee4Strategy:
                         self.spread_bps,
                     )
                     entry_meta = dict(sig.meta or {})
+                    entry_meta["entry_window_id"] = self.params.get("_wfo_window_id", np.nan)
+                    entry_meta.update(self._params_snapshot("entry_params_"))
                     self.position = build_position_state(
                         side=side,
                         entry_price=entry_price,
@@ -347,6 +439,21 @@ class Bee4Strategy:
             "entry_h4_wt1",
             "entry_h4_wt2",
             "entry_h4_delta",
+            "entry_window_id",
+            "entry_params_wt_channel_len",
+            "entry_params_wt_avg_len",
+            "entry_params_wt_signal_len",
+            "entry_params_wt_reentry_window_bars",
+            "entry_params_wt_long_entry_max_above_zero",
+            "entry_params_wt_long_close_min_level",
+            "entry_params_wt_h4_long_filter_max",
+            "entry_params_wt_h4_long_close_min",
+            "entry_params_wt_long_tp1_pct",
+            "entry_params_wt_long_tp2_pct",
+            "entry_params_wt_long_tp1_fraction",
+            "entry_params_wt_long_tp2_fraction",
+            "entry_params_wt_long_tp1_timeout_hours",
+            "entry_params_wt_long_emergency_sl_capital_pct",
             "exit_wt1",
             "exit_wt2",
             "exit_delta",
@@ -359,6 +466,21 @@ class Bee4Strategy:
             "exit_h4_wt1",
             "exit_h4_wt2",
             "exit_h4_delta",
+            "exit_window_id",
+            "exit_params_wt_channel_len",
+            "exit_params_wt_avg_len",
+            "exit_params_wt_signal_len",
+            "exit_params_wt_reentry_window_bars",
+            "exit_params_wt_long_entry_max_above_zero",
+            "exit_params_wt_long_close_min_level",
+            "exit_params_wt_h4_long_filter_max",
+            "exit_params_wt_h4_long_close_min",
+            "exit_params_wt_long_tp1_pct",
+            "exit_params_wt_long_tp2_pct",
+            "exit_params_wt_long_tp1_fraction",
+            "exit_params_wt_long_tp2_fraction",
+            "exit_params_wt_long_tp1_timeout_hours",
+            "exit_params_wt_long_emergency_sl_capital_pct",
             "close_fraction",
             "remaining_fraction_after",
             "logical_trade_no",

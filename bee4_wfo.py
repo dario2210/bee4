@@ -39,6 +39,8 @@ from bee4_params import (
     WT_LONG_TP1_FRACTION_GRID,
     WT_LONG_TP1_PCT,
     WT_LONG_TP1_PCT_GRID,
+    WT_LONG_TP1_TIMEOUT_HOURS,
+    WT_LONG_TP1_TIMEOUT_HOURS_GRID,
     WT_LONG_TP2_FRACTION,
     WT_LONG_TP2_FRACTION_GRID,
     WT_LONG_TP2_PCT,
@@ -206,6 +208,11 @@ def walk_forward_optimization(
         WT_LONG_TP2_FRACTION_GRID,
         float,
     )
+    long_tp1_timeout_hours_grid = _clean_grid(
+        grid_overrides.get("wt_long_tp1_timeout_hours"),
+        WT_LONG_TP1_TIMEOUT_HOURS_GRID,
+        float,
+    )
     h4_short_filter_grid = (
         _clean_grid(
             grid_overrides.get("wt_h4_short_filter_min"),
@@ -249,6 +256,7 @@ def walk_forward_optimization(
         * len(long_tp2_pct_grid)
         * len(long_tp1_fraction_grid)
         * len(long_tp2_fraction_grid)
+        * len(long_tp1_timeout_hours_grid)
         * len(h4_short_filter_grid)
     )
     combo_progress_step = max(1, combo_total // 20)
@@ -290,6 +298,7 @@ def walk_forward_optimization(
             "wt_long_tp2_pct",
             "wt_long_tp1_fraction",
             "wt_long_tp2_fraction",
+            "wt_long_tp1_timeout_hours",
         ]
         if shorts_enabled:
             selection_keys.extend(["wt_short_entry_min_below_zero", "wt_h4_short_filter_min"])
@@ -324,6 +333,7 @@ def walk_forward_optimization(
             wt_long_tp2_pct,
             wt_long_tp1_fraction,
             wt_long_tp2_fraction,
+            wt_long_tp1_timeout_hours,
         ) in product(
             channel_grid,
             avg_grid,
@@ -344,6 +354,7 @@ def walk_forward_optimization(
             long_tp2_pct_grid,
             long_tp1_fraction_grid,
             long_tp2_fraction_grid,
+            long_tp1_timeout_hours_grid,
         ):
             if should_stop is not None and should_stop():
                 stopped = True
@@ -393,6 +404,7 @@ def walk_forward_optimization(
                     "wt_long_tp2_enabled": tp2_enabled,
                     "wt_long_tp2_pct": wt_long_tp2_pct,
                     "wt_long_tp2_fraction": wt_long_tp2_fraction,
+                    "wt_long_tp1_timeout_hours": wt_long_tp1_timeout_hours,
                 }
             )
             if not shorts_enabled:
@@ -460,7 +472,9 @@ def walk_forward_optimization(
             dd_arr = (equity - running_max) / running_max
             opt_max_dd = dd_arr.min() * 100.0
 
-        strat = Bee4Strategy(best_params, fee_rate=fee_rate)
+        live_params = dict(best_params)
+        live_params["_wfo_window_id"] = window_id
+        strat = Bee4Strategy(live_params, fee_rate=fee_rate)
         (
             trades_live,
             equity_live,
@@ -507,6 +521,10 @@ def walk_forward_optimization(
             trades_live["wt_long_tp2_pct"] = best_params.get("wt_long_tp2_pct", WT_LONG_TP2_PCT)
             trades_live["wt_long_tp1_fraction"] = best_params.get("wt_long_tp1_fraction", WT_LONG_TP1_FRACTION)
             trades_live["wt_long_tp2_fraction"] = best_params.get("wt_long_tp2_fraction", WT_LONG_TP2_FRACTION)
+            trades_live["wt_long_tp1_timeout_hours"] = best_params.get(
+                "wt_long_tp1_timeout_hours",
+                WT_LONG_TP1_TIMEOUT_HOURS,
+            )
             trades_live["wt_long_emergency_sl_enabled"] = bool(
                 best_params.get("wt_long_emergency_sl_enabled", False)
             )
@@ -562,6 +580,10 @@ def walk_forward_optimization(
                     "wt_long_tp2_fraction",
                     WT_LONG_TP2_FRACTION,
                 ),
+                "best_wt_long_tp1_timeout_hours": best_params.get(
+                    "wt_long_tp1_timeout_hours",
+                    WT_LONG_TP1_TIMEOUT_HOURS,
+                ),
                 "best_wt_long_emergency_sl_enabled": bool(
                     best_params.get("wt_long_emergency_sl_enabled", False)
                 ),
@@ -600,6 +622,7 @@ def walk_forward_optimization(
                 f"{best_params.get('wt_long_tp1_fraction', WT_LONG_TP1_FRACTION) * 100:.0f}% "
                 f"tp2={best_params.get('wt_long_tp2_pct', WT_LONG_TP2_PCT) * 100:.1f}%/"
                 f"{best_params.get('wt_long_tp2_fraction', WT_LONG_TP2_FRACTION) * 100:.0f}% "
+                f"tp1_timeout={best_params.get('wt_long_tp1_timeout_hours', WT_LONG_TP1_TIMEOUT_HOURS):.0f}h "
                 f"sl={best_params.get('wt_long_emergency_sl_capital_pct', WT_LONG_EMERGENCY_SL_CAPITAL_PCT) * 100:.0f}% "
                 f"short=off"
             )
@@ -720,6 +743,11 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         if "best_wt_long_tp2_fraction" in recent.columns
         else WT_LONG_TP2_FRACTION
     )
+    long_tp1_timeout_hours = (
+        float(recent["best_wt_long_tp1_timeout_hours"].mode().iloc[0])
+        if "best_wt_long_tp1_timeout_hours" in recent.columns
+        else WT_LONG_TP1_TIMEOUT_HOURS
+    )
     allow_longs = True
     allow_shorts = False
     trade_direction = "long"
@@ -755,5 +783,6 @@ def get_latest_best_params(windows_df: pd.DataFrame) -> dict:
         "wt_long_tp2_enabled": long_tp2_pct > 0.0 and long_tp2_fraction > 0.0,
         "wt_long_tp2_pct": long_tp2_pct,
         "wt_long_tp2_fraction": long_tp2_fraction,
+        "wt_long_tp1_timeout_hours": long_tp1_timeout_hours,
     }
 

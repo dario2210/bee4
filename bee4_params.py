@@ -58,6 +58,7 @@ WT_LONG_TP1_BREAKEVEN_ENABLED = True
 WT_LONG_TP2_ENABLED = True
 WT_LONG_TP2_PCT = 0.03
 WT_LONG_TP2_FRACTION = 1.0 / 3.0
+WT_LONG_TP1_TIMEOUT_HOURS = 72.0
 WT_LONG_EMERGENCY_SL_ENABLED = False
 WT_LONG_EMERGENCY_SL_CAPITAL_PCT = 0.0
 WT_SHORT_TP1_ENABLED = True
@@ -112,6 +113,8 @@ WT_LONG_TP1_FRACTION_GRID = [0.0, 0.25, 1.0 / 3.0, 0.5]
 WT_LONG_TP1_FRACTION_OPTIONS = [0.0, 0.25, 1.0 / 3.0, 0.5]
 WT_LONG_TP2_FRACTION_GRID = [0.0, 0.25, 1.0 / 3.0, 0.5]
 WT_LONG_TP2_FRACTION_OPTIONS = [0.0, 0.25, 1.0 / 3.0, 0.5]
+WT_LONG_TP1_TIMEOUT_HOURS_GRID = [24.0, 48.0, 72.0]
+WT_LONG_TP1_TIMEOUT_HOURS_OPTIONS = [24.0, 48.0, 72.0]
 
 # Compatibility aliases kept so the bee1 dashboard structure can stay intact
 TP_GRID = WT_CHANNEL_LEN_GRID
@@ -159,6 +162,7 @@ DEFAULT_PARAMS = {
     "wt_long_tp2_enabled": WT_LONG_TP2_ENABLED,
     "wt_long_tp2_pct": WT_LONG_TP2_PCT,
     "wt_long_tp2_fraction": WT_LONG_TP2_FRACTION,
+    "wt_long_tp1_timeout_hours": WT_LONG_TP1_TIMEOUT_HOURS,
     "wt_long_emergency_sl_enabled": WT_LONG_EMERGENCY_SL_ENABLED,
     "wt_long_emergency_sl_capital_pct": WT_LONG_EMERGENCY_SL_CAPITAL_PCT,
     "wt_short_tp1_enabled": WT_SHORT_TP1_ENABLED,
