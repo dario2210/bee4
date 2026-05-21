@@ -1608,6 +1608,47 @@ class TestBacktestRunnerParity:
         assert list(bt_real["reason"]) == [t["reason"] for t in runner_trades]
 
 
+class TestDashboardWFOGridPersistence:
+    def test_saved_wfo_grid_restores_checkbox_values_in_dashboard_order(self):
+        from bee4_dashboard import WFO_GRID_CONTROL_ORDER, _wfo_grid_values_from_result
+
+        result = {
+            "wfo_grid_overrides": {
+                "wt_channel_len": [10],
+                "wt_avg_len": [21],
+                "wt_signal_len": [3],
+                "wt_min_signal_level": [0.0],
+                "wt_reentry_window_bars": [0, 3],
+                "wt_use_ema_filter": [False],
+                "wt_use_htf_filter": [False],
+                "wt_ema_filter_len": [20],
+                "wt_long_entry_max_above_zero": [-50.0, -40.0],
+                "wt_short_entry_min_below_zero": [30.0],
+                "wt_h4_long_filter_max": [-60.0, -50.0],
+                "wt_h4_short_filter_min": [50.0],
+                "wt_long_close_min_level": [50.0, 60.0],
+                "wt_h4_long_close_min": [50.0],
+                "wt_long_emergency_sl_capital_pct": [0.0],
+                "wt_long_tp1_pct": [0.01],
+                "wt_long_tp2_pct": [0.03],
+                "wt_long_tp1_fraction": [0.25],
+                "wt_long_tp2_fraction": [0.25],
+                "wt_long_tp1_timeout_hours": [24.0, 72.0],
+            }
+        }
+
+        restored = _wfo_grid_values_from_result(result)
+        by_component = {
+            component_id: value
+            for (component_id, _grid_key), value in zip(WFO_GRID_CONTROL_ORDER, restored)
+        }
+
+        assert by_component["chk-grid-long-zone"] == [-50.0, -40.0]
+        assert by_component["chk-grid-h4-long"] == [-60.0, -50.0]
+        assert by_component["chk-grid-long-tp1-timeout"] == [24.0, 72.0]
+        assert by_component["chk-grid-reentry"] == [0, 3]
+
+
 class TestPineExport:
     def test_repeated_wfo_logical_ids_get_unique_pine_open_markers(self):
         from bee4_dashboard import _build_pine_trades_overlay

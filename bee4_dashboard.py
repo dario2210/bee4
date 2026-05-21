@@ -151,6 +151,12 @@ def pct_checklist_options(values, decimals: int = 0):
         for v in values
     ]
 
+def wfo_checklist(**kwargs):
+    """Checklist WFO zapamiętuje wybór w localStorage przeglądarki."""
+    kwargs.setdefault("persistence", True)
+    kwargs.setdefault("persistence_type", "local")
+    return dcc.Checklist(**kwargs)
+
 card_s = {
     "background": C["surface"],
     "border": f"1px solid {C['border']}",
@@ -270,6 +276,8 @@ def _result_metadata_rows(result_data: dict) -> list[tuple[str, str]]:
                 ),
                 ("wfo_bars", f"OPT {result_data.get('wfo_opt_bars', 'n/d')} / LIVE {result_data.get('wfo_live_bars', 'n/d')}"),
                 ("wfo_expected_windows", str(result_data.get("wfo_expected_windows", "n/d"))),
+                ("wfo_grid_combo_count", str(result_data.get("wfo_grid_combo_count", "n/d"))),
+                ("wfo_grid_saved", "yes" if result_data.get("wfo_grid_overrides") else "no"),
             ]
         )
     return rows
@@ -591,6 +599,40 @@ def _grid_combo_count(grid_overrides: dict) -> int:
     for values in grid_overrides.values():
         total *= max(1, len(values))
     return total
+
+
+WFO_GRID_CONTROL_ORDER = [
+    ("chk-grid-channel", "wt_channel_len"),
+    ("chk-grid-avg", "wt_avg_len"),
+    ("chk-grid-signal", "wt_signal_len"),
+    ("chk-grid-min-level", "wt_min_signal_level"),
+    ("chk-grid-reentry", "wt_reentry_window_bars"),
+    ("chk-grid-ema-filter", "wt_use_ema_filter"),
+    ("chk-grid-htf-filter", "wt_use_htf_filter"),
+    ("chk-grid-ema-len", "wt_ema_filter_len"),
+    ("chk-grid-long-zone", "wt_long_entry_max_above_zero"),
+    ("chk-grid-short-zone", "wt_short_entry_min_below_zero"),
+    ("chk-grid-h4-long", "wt_h4_long_filter_max"),
+    ("chk-grid-h4-short", "wt_h4_short_filter_min"),
+    ("chk-grid-long-close-level", "wt_long_close_min_level"),
+    ("chk-grid-h4-long-close", "wt_h4_long_close_min"),
+    ("chk-grid-long-sl-pct", "wt_long_emergency_sl_capital_pct"),
+    ("chk-grid-long-tp1-pct", "wt_long_tp1_pct"),
+    ("chk-grid-long-tp2-pct", "wt_long_tp2_pct"),
+    ("chk-grid-long-tp1-frac", "wt_long_tp1_fraction"),
+    ("chk-grid-long-tp2-frac", "wt_long_tp2_fraction"),
+    ("chk-grid-long-tp1-timeout", "wt_long_tp1_timeout_hours"),
+]
+
+
+def _wfo_grid_values_from_result(result_data: dict | None) -> list:
+    grid = result_data.get("wfo_grid_overrides", {}) if isinstance(result_data, dict) else {}
+    if not isinstance(grid, dict) or not grid:
+        return [dash.no_update] * len(WFO_GRID_CONTROL_ORDER)
+    return [
+        grid.get(grid_key, dash.no_update)
+        for _component_id, grid_key in WFO_GRID_CONTROL_ORDER
+    ]
 
 
 PARAM_SUMMARY_ORDER = [
@@ -2740,21 +2782,21 @@ def sidebar():
             ),
             html.Div([
                 sec("Siatka Channel"),
-                dcc.Checklist(id="chk-grid-channel",
+                wfo_checklist(id="chk-grid-channel",
                     options=[{"label":f" {v}","value":v}
                              for v in WT_CHANNEL_LEN_GRID],
                     value=WT_CHANNEL_LEN_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Siatka Average"),
-                dcc.Checklist(id="chk-grid-avg",
+                wfo_checklist(id="chk-grid-avg",
                     options=[{"label":f" {v}","value":v}
                              for v in WT_AVG_LEN_GRID],
                     value=WT_AVG_LEN_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Siatka Signal"),
-                dcc.Checklist(id="chk-grid-signal",
+                wfo_checklist(id="chk-grid-signal",
                     options=[{"label":f" {v}","value":v} for v in WT_SIGNAL_LEN_GRID],
                     value=WT_SIGNAL_LEN_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
@@ -2762,7 +2804,7 @@ def sidebar():
             ], style={"display":"none"}),
             html.Div([
                 sec("Entry window H1"),
-                dcc.Checklist(id="chk-grid-reentry",
+                wfo_checklist(id="chk-grid-reentry",
                     options=[{"label":f" {v}","value":v} for v in WT_REENTRY_WINDOW_GRID],
                     value=WT_REENTRY_WINDOW_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
@@ -2770,7 +2812,7 @@ def sidebar():
             ]),
             html.Div([
                 sec("Stop loss"),
-                dcc.Checklist(id="chk-grid-long-sl-pct",
+                wfo_checklist(id="chk-grid-long-sl-pct",
                     options=[
                         {
                             "label": " Wyłączony" if v == 0.0 else f" {v * 100:.0f}%",
@@ -2784,31 +2826,31 @@ def sidebar():
             ]),
             html.Div([
                 sec("TP1 % long"),
-                dcc.Checklist(id="chk-grid-long-tp1-pct",
+                wfo_checklist(id="chk-grid-long-tp1-pct",
                     options=pct_checklist_options(WT_LONG_TP1_PCT_OPTIONS),
                     value=WT_LONG_TP1_PCT_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("TP2 % long"),
-                dcc.Checklist(id="chk-grid-long-tp2-pct",
+                wfo_checklist(id="chk-grid-long-tp2-pct",
                     options=pct_checklist_options(WT_LONG_TP2_PCT_OPTIONS),
                     value=WT_LONG_TP2_PCT_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("TP1 close %"),
-                dcc.Checklist(id="chk-grid-long-tp1-frac",
+                wfo_checklist(id="chk-grid-long-tp1-frac",
                     options=pct_checklist_options(WT_LONG_TP1_FRACTION_OPTIONS),
                     value=WT_LONG_TP1_FRACTION_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("TP2 close %"),
-                dcc.Checklist(id="chk-grid-long-tp2-frac",
+                wfo_checklist(id="chk-grid-long-tp2-frac",
                     options=pct_checklist_options(WT_LONG_TP2_FRACTION_OPTIONS),
                     value=WT_LONG_TP2_FRACTION_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Max time to TP1"),
-                dcc.Checklist(id="chk-grid-long-tp1-timeout",
+                wfo_checklist(id="chk-grid-long-tp1-timeout",
                     options=[{"label": f" {v:.0f}h", "value": v} for v in WT_LONG_TP1_TIMEOUT_HOURS_OPTIONS],
                     value=WT_LONG_TP1_TIMEOUT_HOURS_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
@@ -2816,13 +2858,13 @@ def sidebar():
             ]),
             html.Div([
                 sec("Siatka Min level"),
-                dcc.Checklist(id="chk-grid-min-level",
+                wfo_checklist(id="chk-grid-min-level",
                     options=[{"label":f" {v:.1f}","value":v} for v in WT_MIN_SIGNAL_LEVEL_OPTIONS],
                     value=WT_MIN_SIGNAL_LEVEL_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Siatka EMA on/off"),
-                dcc.Checklist(id="chk-grid-ema-filter",
+                wfo_checklist(id="chk-grid-ema-filter",
                     options=[
                         {"label":" Off","value":False},
                         {"label":" On","value":True},
@@ -2831,7 +2873,7 @@ def sidebar():
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Siatka HTF trend"),
-                dcc.Checklist(id="chk-grid-htf-filter",
+                wfo_checklist(id="chk-grid-htf-filter",
                     options=[
                         {"label":" Off","value":False},
                         {"label":" On","value":True},
@@ -2840,47 +2882,47 @@ def sidebar():
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
                 sec("Siatka EMA length"),
-                dcc.Checklist(id="chk-grid-ema-len",
+                wfo_checklist(id="chk-grid-ema-len",
                     options=[{"label":f" {v}","value":v} for v in WT_EMA_FILTER_LEN_OPTIONS],
                     value=WT_EMA_FILTER_LEN_GRID, inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             sec("Long open level H1"),
-            dcc.Checklist(id="chk-grid-long-zone",
+            wfo_checklist(id="chk-grid-long-zone",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_ENTRY_MAX_ABOVE_ZERO_OPTIONS],
                 value=WT_LONG_ENTRY_MAX_ABOVE_ZERO_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Long close level H1"),
-            dcc.Checklist(id="chk-grid-long-close-level",
+            wfo_checklist(id="chk-grid-long-close-level",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_LONG_CLOSE_MIN_LEVEL_OPTIONS],
                 value=WT_LONG_CLOSE_MIN_LEVEL_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div([
                 sec("Short zone min"),
-                dcc.Checklist(id="chk-grid-short-zone",
+                wfo_checklist(id="chk-grid-short-zone",
                     options=[{"label":f" {v:.1f}","value":v} for v in WT_SHORT_ENTRY_MIN_BELOW_ZERO_OPTIONS],
                     value=[DEFAULT_PARAMS["wt_short_entry_min_below_zero"]], inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                     labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             ], style={"display":"none"}),
             sec("Long open level H4"),
-            dcc.Checklist(id="chk-grid-h4-long",
+            wfo_checklist(id="chk-grid-h4-long",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_FILTER_MAX_OPTIONS],
                 value=WT_H4_LONG_FILTER_MAX_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             sec("Long close level H4"),
-            dcc.Checklist(id="chk-grid-h4-long-close",
+            wfo_checklist(id="chk-grid-h4-long-close",
                 options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_LONG_CLOSE_MIN_OPTIONS],
                 value=WT_H4_LONG_CLOSE_MIN_GRID, inline=True,
                 inputStyle={"marginRight":"4px","accentColor":C["blue"]},
                 labelStyle={"color":"#e8eaf6","fontSize":"12px","marginRight":"10px"}),
             html.Div([
                 sec("Short filter H4"),
-                dcc.Checklist(id="chk-grid-h4-short",
+                wfo_checklist(id="chk-grid-h4-short",
                     options=[{"label":f" {v:.1f}","value":v} for v in WT_H4_SHORT_FILTER_MIN_OPTIONS],
                     value=[DEFAULT_PARAMS["wt_h4_short_filter_min"]], inline=True,
                     inputStyle={"marginRight":"4px","accentColor":C["blue"]},
@@ -3373,6 +3415,8 @@ def _worker(
             "wfo_opt_bars": ob,
             "wfo_live_bars": lb,
             "wfo_expected_windows": total,
+            "wfo_grid_combo_count": combo_total,
+            "wfo_grid_overrides": grid_overrides,
         }
         wfo_started_at = _time.time()
         progress_total_windows = max(total, 1)
@@ -3697,6 +3741,15 @@ def load_saved_result(n_clicks, filename):
         return result, None, f"Wczytano: {filename}"
     except Exception as exc:
         return dash.no_update, dash.no_update, f"Błąd wczytywania: {exc}"
+
+
+@app.callback(
+    [Output(component_id, "value") for component_id, _grid_key in WFO_GRID_CONTROL_ORDER],
+    Input("store-result", "data"),
+    prevent_initial_call=True,
+)
+def restore_wfo_grid_controls(result_data):
+    return _wfo_grid_values_from_result(result_data)
 
 # ─── Callback: uruchom / stop ─────────────────────────────────────────────────
 @app.callback(
